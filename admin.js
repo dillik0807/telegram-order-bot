@@ -778,10 +778,32 @@ function setupAdminCommands(bot) {
       return ctx.reply('❌ У вас нет прав администратора');
     }
     
+    const keyboard = [
+      [{ text: '📈 Общая статистика' }],
+      [{ text: '👥 Детальная по клиентам' }],
+      [{ text: '📦 Последние заявки' }],
+      [{ text: '🏬 Статистика по складам' }],
+      [{ text: '🔙 Назад в админ-панель' }]
+    ];
+    
+    ctx.reply(
+      '📊 Статистика\n\n' +
+      'Выберите тип статистики:',
+      { reply_markup: { keyboard, resize_keyboard: true } }
+    );
+  });
+
+  bot.hears('📈 Общая статистика', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
     try {
       const stats = await database.getStats();
       
-      let message = '📊 Статистика\n\n';
+      let message = '📈 Общая статистика\n\n';
       message += `👥 Всего клиентов: ${stats.totalClients}\n`;
       message += `📦 Всего заявок: ${stats.totalOrders}\n`;
       message += `📅 Заявок сегодня: ${stats.ordersToday}\n`;
@@ -792,6 +814,159 @@ function setupAdminCommands(bot) {
     } catch (error) {
       console.error('Ошибка получения статистики:', error);
       ctx.reply('❌ Ошибка при получении статистики');
+    }
+  });
+
+  bot.hears('👥 Детальная по клиентам', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    try {
+      const clientStats = await database.getDetailedOrderStats();
+      
+      if (clientStats.length === 0) {
+        return ctx.reply('📋 Нет данных о заявках клиентов');
+      }
+      
+      let message = '👥 Детальная статистика по клиентам:\n\n';
+      
+      clientStats.forEach((client, index) => {
+        message += `${index + 1}. ${client.client_name || 'Без имени'}\n`;
+        message += `   📞 ${client.phone || 'Не указан'}\n`;
+        message += `   🆔 ID: ${client.telegram_id}\n`;
+        message += `   📦 Заявок: ${client.orders_count}\n`;
+        
+        if (client.last_order_date) {
+          const lastOrder = new Date(client.last_order_date);
+          message += `   📅 Последняя заявка: ${lastOrder.toLocaleDateString('ru-RU')} ${lastOrder.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})}\n`;
+        } else {
+          message += `   📅 Заявок не было\n`;
+        }
+        
+        message += '\n';
+      });
+      
+      // Разбиваем длинное сообщение на части если нужно
+      if (message.length > 4000) {
+        const parts = [];
+        let currentPart = '👥 Детальная статистика по клиентам:\n\n';
+        const lines = message.split('\n');
+        
+        for (let i = 2; i < lines.length; i++) {
+          if (currentPart.length + lines[i].length > 3800) {
+            parts.push(currentPart);
+            currentPart = lines[i] + '\n';
+          } else {
+            currentPart += lines[i] + '\n';
+          }
+        }
+        
+        if (currentPart.trim()) {
+          parts.push(currentPart);
+        }
+        
+        for (const part of parts) {
+          await ctx.reply(part);
+        }
+      } else {
+        ctx.reply(message);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка получения детальной статистики:', error);
+      ctx.reply('❌ Ошибка при получении детальной статистики');
+    }
+  });
+
+  bot.hears('📦 Последние заявки', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    try {
+      const recentOrders = await database.getRecentOrdersWithClients(15);
+      
+      if (recentOrders.length === 0) {
+        return ctx.reply('📋 Нет заявок');
+      }
+      
+      let message = '📦 Последние 15 заявок:\n\n';
+      
+      recentOrders.forEach((order, index) => {
+        const orderDate = new Date(order.created_at);
+        message += `${index + 1}. Заявка #${order.id}\n`;
+        message += `   👤 ${order.client_name || 'Без имени'}\n`;
+        message += `   📞 ${order.phone || 'Не указан'}\n`;
+        message += `   🏬 Склад: ${order.warehouse}\n`;
+        message += `   🚛 Транспорт: ${order.transport_number || 'Не указан'}\n`;
+        message += `   📅 ${orderDate.toLocaleDateString('ru-RU')} ${orderDate.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})}\n`;
+        message += `   📝 ${order.comment || 'Без комментария'}\n\n`;
+      });
+      
+      // Разбиваем длинное сообщение на части если нужно
+      if (message.length > 4000) {
+        const parts = [];
+        let currentPart = '📦 Последние 15 заявок:\n\n';
+        const lines = message.split('\n');
+        
+        for (let i = 2; i < lines.length; i++) {
+          if (currentPart.length + lines[i].length > 3800) {
+            parts.push(currentPart);
+            currentPart = lines[i] + '\n';
+          } else {
+            currentPart += lines[i] + '\n';
+          }
+        }
+        
+        if (currentPart.trim()) {
+          parts.push(currentPart);
+        }
+        
+        for (const part of parts) {
+          await ctx.reply(part);
+        }
+      } else {
+        ctx.reply(message);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка получения последних заявок:', error);
+      ctx.reply('❌ Ошибка при получении последних заявок');
+    }
+  });
+
+  bot.hears('🏬 Статистика по складам', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    try {
+      const warehouseStats = await database.getWarehouseStats();
+      
+      if (warehouseStats.length === 0) {
+        return ctx.reply('📋 Нет данных по складам');
+      }
+      
+      let message = '🏬 Статистика по складам:\n\n';
+      
+      warehouseStats.forEach((warehouse, index) => {
+        message += `${index + 1}. ${warehouse.warehouse}\n`;
+        message += `   📦 Заявок: ${warehouse.orders_count}\n`;
+        message += `   👥 Уникальных клиентов: ${warehouse.unique_clients}\n\n`;
+      });
+      
+      ctx.reply(message);
+      
+    } catch (error) {
+      console.error('Ошибка получения статистики по складам:', error);
+      ctx.reply('❌ Ошибка при получении статистики по складам');
     }
   });
 }
