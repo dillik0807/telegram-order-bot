@@ -45,46 +45,77 @@ class ExcelExporter {
     }
   }
 
-  // Экспорт последних заявок
+  // Экспорт последних заявок с детальным форматом
   async exportRecentOrders(limit = 50) {
     try {
       const orders = await database.getRecentOrdersWithClients(limit);
       
-      const data = orders.map((order, index) => ({
-        '№': index + 1,
-        'ID заявки': order.id,
-        'Имя клиента': order.client_name || 'Без имени',
-        'Телефон': order.phone || 'Не указан',
-        'Telegram ID': order.telegram_id,
-        'Склад': order.warehouse || 'Не указан',
-        'Номер транспорта': order.transport_number || 'Не указан',
-        'Комментарий': order.comment || 'Без комментария',
-        'Статус': order.status,
-        'Дата создания': new Date(order.created_at).toLocaleString('ru-RU')
-      }));
-
-      // Получаем товары для каждой заявки
-      for (let i = 0; i < data.length; i++) {
+      const data = [];
+      
+      for (let i = 0; i < orders.length; i++) {
+        const order = orders[i];
+        const orderDate = new Date(order.created_at);
+        
+        // Получаем товары для заявки
+        let itemsText = 'Не указаны';
+        let totalQuantity = 0;
+        
         try {
-          const orderWithItems = await database.getOrderWithItems(orders[i].id);
+          const orderWithItems = await database.getOrderWithItems(order.id);
           if (orderWithItems.items && orderWithItems.items.length > 0) {
-            const items = orderWithItems.items.map(item => 
-              `${item.product_name} (${item.quantity})`
-            ).join('; ');
-            data[i]['Товары'] = items;
-          } else {
-            data[i]['Товары'] = 'Не указаны';
+            const itemsList = orderWithItems.items.map((item, idx) => {
+              const quantity = parseInt(item.quantity) || 0;
+              totalQuantity += quantity;
+              return `${idx + 1}) ${item.product_name} — ${item.quantity} шт`;
+            });
+            itemsText = itemsList.join('\n');
           }
         } catch (error) {
-          data[i]['Товары'] = 'Ошибка загрузки';
+          itemsText = 'Ошибка загрузки товаров';
         }
+        
+        // Формируем детальную запись как в заявке
+        const detailedOrder = {
+          '№': i + 1,
+          'Заявка': `📦 ЗАЯВКА #${order.id}`,
+          'Клиент': `👤 ${order.client_name || 'Без имени'}`,
+          'Телефон': `📞 ${order.phone || 'Не указан'}`,
+          'Telegram ID': order.telegram_id,
+          'Склад': `🏬 ${order.warehouse || 'Не указан'}`,
+          'Товары': `🛒 Товары:\n${itemsText}`,
+          'Итого товаров': `📊 Итого: ${totalQuantity} шт`,
+          'Транспорт': `🚚 ${order.transport_number || 'Не указан'}`,
+          'Комментарий': `📝 ${order.comment || 'Без комментария'}`,
+          'Статус': order.status,
+          'Время создания': `⏰ ${orderDate.toLocaleDateString('ru-RU')}, ${orderDate.toLocaleTimeString('ru-RU')}`
+        };
+        
+        data.push(detailedOrder);
       }
 
       const worksheet = XLSX.utils.json_to_sheet(data);
+      
+      // Настраиваем ширину колонок
+      const colWidths = [
+        { wch: 5 },   // №
+        { wch: 20 },  // Заявка
+        { wch: 25 },  // Клиент
+        { wch: 20 },  // Телефон
+        { wch: 15 },  // Telegram ID
+        { wch: 20 },  // Склад
+        { wch: 50 },  // Товары
+        { wch: 20 },  // Итого товаров
+        { wch: 25 },  // Транспорт
+        { wch: 40 },  // Комментарий
+        { wch: 15 },  // Статус
+        { wch: 25 }   // Время создания
+      ];
+      worksheet['!cols'] = colWidths;
+      
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Последние заявки');
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Детальные заявки');
 
-      const fileName = `recent_orders_${this.getDateString()}.xlsx`;
+      const fileName = `detailed_orders_${this.getDateString()}.xlsx`;
       const filePath = path.join(this.exportDir, fileName);
       
       XLSX.writeFile(workbook, filePath);
@@ -167,22 +198,71 @@ class ExcelExporter {
       const warehouseSheet = XLSX.utils.json_to_sheet(warehouseData);
       XLSX.utils.book_append_sheet(workbook, warehouseSheet, 'Склады');
 
-      // 4. Последние заявки
+      // 4. Детальные заявки
       const orders = await database.getRecentOrdersWithClients(100);
-      const orderData = orders.map((order, index) => ({
-        '№': index + 1,
-        'ID заявки': order.id,
-        'Имя клиента': order.client_name || 'Без имени',
-        'Телефон': order.phone || 'Не указан',
-        'Telegram ID': order.telegram_id,
-        'Склад': order.warehouse || 'Не указан',
-        'Номер транспорта': order.transport_number || 'Не указан',
-        'Комментарий': order.comment || 'Без комментария',
-        'Статус': order.status,
-        'Дата создания': new Date(order.created_at).toLocaleString('ru-RU')
-      }));
+      const orderData = [];
+      
+      for (let i = 0; i < orders.length; i++) {
+        const order = orders[i];
+        const orderDate = new Date(order.created_at);
+        
+        // Получаем товары для заявки
+        let itemsText = 'Не указаны';
+        let totalQuantity = 0;
+        
+        try {
+          const orderWithItems = await database.getOrderWithItems(order.id);
+          if (orderWithItems.items && orderWithItems.items.length > 0) {
+            const itemsList = orderWithItems.items.map((item, idx) => {
+              const quantity = parseInt(item.quantity) || 0;
+              totalQuantity += quantity;
+              return `${idx + 1}) ${item.product_name} — ${item.quantity} шт`;
+            });
+            itemsText = itemsList.join('\n');
+          }
+        } catch (error) {
+          itemsText = 'Ошибка загрузки товаров';
+        }
+        
+        // Формируем детальную запись
+        const detailedOrder = {
+          '№': i + 1,
+          'Заявка': `📦 ЗАЯВКА #${order.id}`,
+          'Клиент': `👤 ${order.client_name || 'Без имени'}`,
+          'Телефон': `📞 ${order.phone || 'Не указан'}`,
+          'Telegram ID': order.telegram_id,
+          'Склад': `🏬 ${order.warehouse || 'Не указан'}`,
+          'Товары': `🛒 Товары:\n${itemsText}`,
+          'Итого товаров': `📊 Итого: ${totalQuantity} шт`,
+          'Транспорт': `🚚 ${order.transport_number || 'Не указан'}`,
+          'Комментарий': `📝 ${order.comment || 'Без комментария'}`,
+          'Статус': order.status,
+          'Время создания': `⏰ ${orderDate.toLocaleDateString('ru-RU')}, ${orderDate.toLocaleTimeString('ru-RU')}`
+        };
+        
+        orderData.push(detailedOrder);
+      }
+      
       const orderSheet = XLSX.utils.json_to_sheet(orderData);
-      XLSX.utils.book_append_sheet(workbook, orderSheet, 'Заявки');
+      
+      // Настраиваем ширину колонок для листа заявок
+      const orderColWidths = [
+        { wch: 5 },   // №
+        { wch: 20 },  // Заявка
+        { wch: 25 },  // Клиент
+        { wch: 20 },  // Телефон
+        { wch: 15 },  // Telegram ID
+        { wch: 20 },  // Склад
+        { wch: 50 },  // Товары
+        { wch: 20 },  // Итого товаров
+        { wch: 25 },  // Транспорт
+        { wch: 40 },  // Комментарий
+        { wch: 15 },  // Статус
+        { wch: 25 }   // Время создания
+      ];
+      orderSheet['!cols'] = orderColWidths;
+      
+      XLSX.utils.book_append_sheet(workbook, orderSheet, 'Детальные заявки');
 
       const fileName = `full_report_${this.getDateString()}.xlsx`;
       const filePath = path.join(this.exportDir, fileName);
@@ -196,7 +276,93 @@ class ExcelExporter {
     }
   }
 
-  // Получить строку с датой для имени файла
+  // Экспорт конкретной заявки по ID
+  async exportSingleOrder(orderId) {
+    try {
+      // Получаем заявку с товарами
+      const orderWithItems = await database.getOrderWithItems(orderId);
+      
+      if (!orderWithItems) {
+        return { success: false, error: 'Заявка не найдена' };
+      }
+      
+      // Получаем информацию о клиенте
+      const orders = await database.getRecentOrdersWithClients(1000);
+      const orderInfo = orders.find(o => o.id === orderId);
+      
+      if (!orderInfo) {
+        return { success: false, error: 'Информация о клиенте не найдена' };
+      }
+      
+      const orderDate = new Date(orderInfo.created_at);
+      
+      // Формируем список товаров
+      let itemsText = 'Не указаны';
+      let totalQuantity = 0;
+      
+      if (orderWithItems.items && orderWithItems.items.length > 0) {
+        const itemsList = orderWithItems.items.map((item, idx) => {
+          const quantity = parseInt(item.quantity) || 0;
+          totalQuantity += quantity;
+          return `${idx + 1}) ${item.product_name} — ${item.quantity} шт`;
+        });
+        itemsText = itemsList.join('\n');
+      }
+      
+      // Создаем детальную информацию о заявке
+      const orderData = [{
+        'Информация': 'Значение',
+        'Заявка': `📦 ЗАЯВКА #${orderInfo.id}`,
+        'Клиент': `👤 ${orderInfo.client_name || 'Без имени'}`,
+        'Телефон': `📞 ${orderInfo.phone || 'Не указан'}`,
+        'Telegram ID': orderInfo.telegram_id,
+        'Склад': `🏬 ${orderInfo.warehouse || 'Не указан'}`,
+        'Товары': `🛒 Товары:\n${itemsText}`,
+        'Итого товаров': `📊 Итого: ${totalQuantity} шт`,
+        'Транспорт': `🚚 ${orderInfo.transport_number || 'Не указан'}`,
+        'Комментарий': `📝 ${orderInfo.comment || 'Без комментария'}`,
+        'Статус': orderInfo.status,
+        'Время создания': `⏰ ${orderDate.toLocaleDateString('ru-RU')}, ${orderDate.toLocaleTimeString('ru-RU')}`
+      }];
+      
+      // Создаем отдельный лист для товаров
+      const itemsData = [];
+      if (orderWithItems.items && orderWithItems.items.length > 0) {
+        orderWithItems.items.forEach((item, idx) => {
+          itemsData.push({
+            '№': idx + 1,
+            'Товар': item.product_name,
+            'Количество': item.quantity,
+            'Единица': 'шт'
+          });
+        });
+      }
+      
+      const workbook = XLSX.utils.book_new();
+      
+      // Лист с общей информацией
+      const orderSheet = XLSX.utils.json_to_sheet(orderData);
+      orderSheet['!cols'] = [{ wch: 20 }, { wch: 50 }];
+      XLSX.utils.book_append_sheet(workbook, orderSheet, `Заявка #${orderId}`);
+      
+      // Лист с товарами
+      if (itemsData.length > 0) {
+        const itemsSheet = XLSX.utils.json_to_sheet(itemsData);
+        itemsSheet['!cols'] = [{ wch: 5 }, { wch: 30 }, { wch: 15 }, { wch: 10 }];
+        XLSX.utils.book_append_sheet(workbook, itemsSheet, 'Товары');
+      }
+      
+      const fileName = `order_${orderId}_${this.getDateString()}.xlsx`;
+      const filePath = path.join(this.exportDir, fileName);
+      
+      XLSX.writeFile(workbook, filePath);
+      
+      return { success: true, fileName, filePath, orderId };
+    } catch (error) {
+      console.error('Ошибка экспорта заявки:', error);
+      return { success: false, error: error.message };
+    }
+  }
   getDateString() {
     const now = new Date();
     const year = now.getFullYear();
