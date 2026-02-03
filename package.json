@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node bot.js",
     "dev": "nodemon bot.js",
-    "migrate": "node force-migration.js"
+    "migrate": "node railway-migration.js"
   },
   "keywords": [
     "telegram",
