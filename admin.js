@@ -49,19 +49,64 @@ function setupAdminCommands(bot) {
     );
   });
 
-  // 🧪 Тестовая команда для проверки прав
-  bot.command('testadmin', async (ctx) => {
+  // 🧪 Команда для проверки складов
+  bot.command('checkwarehouses', async (ctx) => {
     const userId = ctx.from.id;
-    console.log(`🧪 Тестовая команда от пользователя ${userId}`);
     
-    const isAdminUser = isAdmin(userId);
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
     
-    ctx.reply(
-      `🧪 Тест прав администратора:\n\n` +
-      `👤 Ваш ID: ${userId}\n` +
-      `🔑 Статус: ${isAdminUser ? '✅ Администратор' : '❌ Обычный пользователь'}\n` +
-      `📋 Список админов: [${ADMINS.join(', ')}]`
-    );
+    try {
+      console.log('📋 Получение списка складов из БД...');
+      const warehouses = await database.getAllWarehouses();
+      
+      if (warehouses.length === 0) {
+        return ctx.reply('📋 Складов в базе данных нет');
+      }
+      
+      let message = `📋 Склады в базе данных (${warehouses.length}):\n\n`;
+      
+      warehouses.forEach((w, index) => {
+        const whatsappStatus = w.whatsapp_group_id ? '✅' : '❌';
+        message += `${index + 1}. ${w.name} (ID: ${w.id})\n`;
+        message += `   📱 WhatsApp: ${whatsappStatus}\n`;
+        if (w.whatsapp_group_id) {
+          message += `   🆔 ${w.whatsapp_group_id}\n`;
+        }
+        message += '\n';
+      });
+      
+      // Разбиваем длинное сообщение если нужно
+      if (message.length > 4000) {
+        const parts = [];
+        let currentPart = '';
+        const lines = message.split('\n');
+        
+        for (const line of lines) {
+          if (currentPart.length + line.length > 3800) {
+            parts.push(currentPart);
+            currentPart = line + '\n';
+          } else {
+            currentPart += line + '\n';
+          }
+        }
+        
+        if (currentPart.trim()) {
+          parts.push(currentPart);
+        }
+        
+        for (const part of parts) {
+          await ctx.reply(part);
+        }
+      } else {
+        ctx.reply(message);
+      }
+      
+    } catch (error) {
+      console.error('❌ Ошибка получения складов:', error);
+      ctx.reply(`❌ Ошибка получения складов: ${error.message}`);
+    }
   });
   
   // Обработка команд администратора
@@ -634,49 +679,67 @@ function setupAdminCommands(bot) {
     }
     
     const keyboard = [
-      [{ text: '🔙 Назад в админ-панель' }]
+      [{ text: '🔙 Назад в управление складами' }]
     ];
     
     ctx.reply(
       '➕ Добавление склада\n\n' +
-      'Отправьте команду:\n' +
-      '/addwarehouse Название_склада\n\n' +
-      'Пример:\n' +
-      '/addwarehouse Склад №4',
+      '🔧 Используйте одну из команд:\n\n' +
+      '1️⃣ Обычное добавление:\n' +
+      '/addwarehouse2 Название_склада\n\n' +
+      '2️⃣ Проверить склады:\n' +
+      '/checkwarehouses\n\n' +
+      '💡 Примеры:\n' +
+      '/addwarehouse2 Склад №5\n' +
+      '/addwarehouse2 Новый склад\n\n' +
+      '📱 После добавления можно настроить WhatsApp:\n' +
+      '/setwhatsapp Название | ID_группы',
       { reply_markup: { keyboard, resize_keyboard: true } }
     );
   });
   
-  bot.command('addwarehouse', async (ctx) => {
+  // 🔧 Простая команда добавления склада (обходит проблемы с dataManager)
+  bot.command('addwarehouse2', async (ctx) => {
     const userId = ctx.from.id;
     
-    console.log(`🔍 Команда /addwarehouse от пользователя ${userId}`);
-    console.log(`🔑 Проверка прав администратора...`);
+    console.log(`🔍 Команда /addwarehouse2 от пользователя ${userId}`);
     
     if (!isAdmin(userId)) {
       console.log(`❌ Пользователь ${userId} не является администратором`);
       return ctx.reply('❌ У вас нет прав администратора');
     }
     
-    console.log(`✅ Пользователь ${userId} является администратором`);
-    
-    const name = ctx.message.text.replace('/addwarehouse', '').trim();
+    const name = ctx.message.text.replace('/addwarehouse2', '').trim();
     
     console.log(`📝 Название склада: "${name}"`);
     
     if (!name) {
-      console.log(`❌ Название склада не указано`);
-      return ctx.reply('❌ Укажите название склада');
+      return ctx.reply('❌ Укажите название склада\n\nПример: /addwarehouse2 Новый склад');
     }
     
     try {
-      console.log(`➕ Добавление склада "${name}" в базу данных...`);
-      await dataManager.addWarehouseAndReload(name);
-      console.log(`✅ Склад "${name}" успешно добавлен`);
-      ctx.reply(`✅ Склад "${name}" добавлен и данные обновлены!`);
+      console.log(`➕ Прямое добавление склада "${name}" в базу данных...`);
+      
+      // Прямое добавление через database.js
+      const warehouseId = await database.addWarehouse(name, null);
+      
+      console.log(`✅ Склад "${name}" добавлен с ID: ${warehouseId}`);
+      
+      ctx.reply(
+        `✅ Склад "${name}" успешно добавлен!\n\n` +
+        `🆔 ID: ${warehouseId}\n` +
+        `📱 WhatsApp: не настроен\n\n` +
+        `Для настройки WhatsApp группы используйте:\n` +
+        `/setwhatsapp ${name} | ID_группы`
+      );
+      
     } catch (error) {
       console.error('❌ Ошибка добавления склада:', error);
-      ctx.reply(`❌ Ошибка при добавлении склада: ${error.message}`);
+      ctx.reply(
+        `❌ Ошибка при добавлении склада:\n\n` +
+        `${error.message}\n\n` +
+        `Попробуйте другое название или обратитесь к разработчику.`
+      );
     }
   });
   
