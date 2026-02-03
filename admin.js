@@ -11,7 +11,10 @@ const ADMINS = [
 
 // Проверка, является ли пользователь администратором
 function isAdmin(userId) {
-  return ADMINS.includes(userId);
+  const result = ADMINS.includes(userId);
+  console.log(`🔑 Проверка администратора: ID ${userId} - ${result ? 'АДМИН' : 'НЕ АДМИН'}`);
+  console.log(`📋 Список админов: [${ADMINS.join(', ')}]`);
+  return result;
 }
 
 // Команды для администраторов
@@ -20,6 +23,8 @@ function setupAdminCommands(bot) {
   // Команда /admin - показать админ-панель
   bot.command('admin', async (ctx) => {
     const userId = ctx.from.id;
+    
+    console.log(`🔍 Команда /admin от пользователя ${userId}`);
     
     if (!isAdmin(userId)) {
       return ctx.reply('❌ У вас нет прав администратора');
@@ -41,6 +46,21 @@ function setupAdminCommands(bot) {
       '👨‍💼 Панель администратора\n\n' +
       'Выберите действие:',
       { reply_markup: { keyboard, resize_keyboard: true } }
+    );
+  });
+
+  // 🧪 Тестовая команда для проверки прав
+  bot.command('testadmin', async (ctx) => {
+    const userId = ctx.from.id;
+    console.log(`🧪 Тестовая команда от пользователя ${userId}`);
+    
+    const isAdminUser = isAdmin(userId);
+    
+    ctx.reply(
+      `🧪 Тест прав администратора:\n\n` +
+      `👤 Ваш ID: ${userId}\n` +
+      `🔑 Статус: ${isAdminUser ? '✅ Администратор' : '❌ Обычный пользователь'}\n` +
+      `📋 Список админов: [${ADMINS.join(', ')}]`
     );
   });
   
@@ -630,22 +650,33 @@ function setupAdminCommands(bot) {
   bot.command('addwarehouse', async (ctx) => {
     const userId = ctx.from.id;
     
+    console.log(`🔍 Команда /addwarehouse от пользователя ${userId}`);
+    console.log(`🔑 Проверка прав администратора...`);
+    
     if (!isAdmin(userId)) {
+      console.log(`❌ Пользователь ${userId} не является администратором`);
       return ctx.reply('❌ У вас нет прав администратора');
     }
     
+    console.log(`✅ Пользователь ${userId} является администратором`);
+    
     const name = ctx.message.text.replace('/addwarehouse', '').trim();
     
+    console.log(`📝 Название склада: "${name}"`);
+    
     if (!name) {
+      console.log(`❌ Название склада не указано`);
       return ctx.reply('❌ Укажите название склада');
     }
     
     try {
+      console.log(`➕ Добавление склада "${name}" в базу данных...`);
       await dataManager.addWarehouseAndReload(name);
+      console.log(`✅ Склад "${name}" успешно добавлен`);
       ctx.reply(`✅ Склад "${name}" добавлен и данные обновлены!`);
     } catch (error) {
-      console.error('Ошибка добавления склада:', error);
-      ctx.reply('❌ Ошибка при добавлении склада');
+      console.error('❌ Ошибка добавления склада:', error);
+      ctx.reply(`❌ Ошибка при добавлении склада: ${error.message}`);
     }
   });
   
