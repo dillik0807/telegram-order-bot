@@ -1,5 +1,6 @@
 const database = require('./database');
 const excelExporter = require('./excel-export');
+const dataManager = require('./data-manager');
 
 // Список администраторов (Telegram ID)
 // Добавьте сюда ID администраторов
@@ -25,7 +26,7 @@ function setupAdminCommands(bot) {
     }
     
     const keyboard = [
-      [{ text: '➕ Добавить клиента' }],
+      [{ text: '👥 Управление клиентами' }],
       [{ text: '📋 Список клиентов' }],
       [{ text: '✏️ Изменить данные клиента' }],
       [{ text: '🚫 Заблокировать клиента' }],
@@ -44,7 +45,29 @@ function setupAdminCommands(bot) {
   });
   
   // Обработка команд администратора
-  bot.hears('➕ Добавить клиента', async (ctx) => {
+  bot.hears('👥 Управление клиентами', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const keyboard = [
+      [{ text: '📋 Ожидающие запросы' }],
+      [{ text: '➕ Добавить клиента напрямую' }],
+      [{ text: '🗑️ Удалить клиента' }],
+      [{ text: '🔙 Назад в админ-панель' }]
+    ];
+    
+    ctx.reply(
+      '👥 Управление клиентами\n\n' +
+      'Выберите действие:',
+      { reply_markup: { keyboard, resize_keyboard: true } }
+    );
+  });
+  
+  // Обработка ожидающих запросов (старая функция "Добавить клиента")
+  bot.hears('📋 Ожидающие запросы', async (ctx) => {
     const userId = ctx.from.id;
     
     if (!isAdmin(userId)) {
@@ -87,6 +110,159 @@ function setupAdminCommands(bot) {
       console.error('Ошибка получения запросов:', error);
       ctx.reply('❌ Ошибка при получении списка запросов');
     }
+  });
+  
+  // Прямое добавление клиента администратором
+  bot.hears('➕ Добавить клиента напрямую', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const keyboard = [
+      [{ text: '🔙 Назад в управление клиентами' }]
+    ];
+    
+    ctx.reply(
+      '➕ Прямое добавление клиента\n\n' +
+      'Отправьте команду:\n' +
+      '/addclient Telegram_ID | Имя | Телефон\n\n' +
+      'Пример:\n' +
+      '/addclient 123456789 | Алишер Иванов | +992901234567\n\n' +
+      '💡 Клиент будет добавлен сразу без запроса на регистрацию',
+      { reply_markup: { keyboard, resize_keyboard: true } }
+    );
+  });
+  
+  // Команда для прямого добавления клиента
+  bot.command('addclient', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const text = ctx.message.text.replace('/addclient', '').trim();
+    const parts = text.split('|').map(p => p.trim());
+    
+    if (parts.length !== 3) {
+      return ctx.reply(
+        '❌ Неверный формат!\n\n' +
+        'Используйте:\n' +
+        '/addclient Telegram_ID | Имя | Телефон\n\n' +
+        'Пример:\n' +
+        '/addclient 123456789 | Алишер Иванов | +992901234567'
+      );
+    }
+    
+    const [telegramId, name, phone] = parts;
+    const clientId = parseInt(telegramId);
+    
+    if (isNaN(clientId)) {
+      return ctx.reply('❌ Telegram ID должен быть числом');
+    }
+    
+    try {
+      // Проверяем, не существует ли уже такой клиент
+      const existingClient = await database.getClient(clientId);
+      if (existingClient) {
+        return ctx.reply(
+          `❌ Клиент с ID ${clientId} уже существует!\n\n` +
+          `Имя: ${existingClient.name}\n` +
+          `Телефон: ${existingClient.phone}`
+        );
+      }
+      
+      // Добавляем клиента напрямую
+      await database.addClient(clientId, name, phone, userId);
+      
+      ctx.reply(
+        '✅ Клиент добавлен напрямую!\n\n' +
+        `🆔 Telegram ID: ${clientId}\n` +
+        `👤 Имя: ${name}\n` +
+        `📞 Телефон: ${phone}\n\n` +
+        '💡 Клиент может сразу создавать заявки'
+      );
+      
+      // Уведомление клиенту (если возможно)
+      try {
+        await bot.telegram.sendMessage(
+          clientId,
+          '✅ Вы были добавлены в систему администратором!\n\n' +
+          'Теперь вы можете создавать заявки.\n' +
+          'Отправьте /start для начала работы.'
+        );
+      } catch (error) {
+        console.log(`Не удалось отправить уведомление клиенту ${clientId}:`, error.message);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка добавления клиента:', error);
+      ctx.reply('❌ Ошибка при добавлении клиента');
+    }
+  });
+  
+  // Удаление клиента
+  bot.hears('🗑️ Удалить клиента', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    try {
+      const clients = await database.getAllClients();
+      
+      if (clients.length === 0) {
+        return ctx.reply('📋 Список клиентов пуст');
+      }
+      
+      const keyboard = [
+        [{ text: '🔙 Назад в управление клиентами' }]
+      ];
+      
+      let message = '🗑️ Удаление клиента\n\n';
+      message += 'Выберите клиента для удаления:\n\n';
+      clients.forEach((client, index) => {
+        const name = client.name || 'Без имени';
+        const phone = client.phone || 'Без телефона';
+        message += `${index + 1}. ${name}\n`;
+        message += `   📞 ${phone}\n`;
+        message += `   🆔 ID: ${client.telegram_id}\n\n`;
+      });
+      message += 'Отправьте команду:\n';
+      message += '/removeclient Telegram_ID\n\n';
+      message += 'Пример:\n';
+      message += '/removeclient 123456789';
+      
+      ctx.reply(message, { reply_markup: { keyboard, resize_keyboard: true } });
+      
+    } catch (error) {
+      console.error('Ошибка получения списка:', error);
+      ctx.reply('❌ Ошибка при получении списка клиентов');
+    }
+  });
+  
+  // Кнопка возврата в управление клиентами
+  bot.hears('🔙 Назад в управление клиентами', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return;
+    }
+    
+    const keyboard = [
+      [{ text: '📋 Ожидающие запросы' }],
+      [{ text: '➕ Добавить клиента напрямую' }],
+      [{ text: '🗑️ Удалить клиента' }],
+      [{ text: '🔙 Назад в админ-панель' }]
+    ];
+    
+    ctx.reply(
+      '👥 Управление клиентами',
+      { reply_markup: { keyboard, resize_keyboard: true } }
+    );
   });
   
   // Обработка кнопок одобрения/отклонения
@@ -464,8 +640,8 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      await database.addWarehouse(name);
-      ctx.reply(`✅ Склад "${name}" добавлен!`);
+      await dataManager.addWarehouseAndReload(name);
+      ctx.reply(`✅ Склад "${name}" добавлен и данные обновлены!`);
     } catch (error) {
       console.error('Ошибка добавления склада:', error);
       ctx.reply('❌ Ошибка при добавлении склада');
@@ -548,10 +724,10 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      const result = await database.removeWarehouse(id);
+      const result = await dataManager.removeWarehouseAndReload(id);
       
       if (result) {
-        ctx.reply('✅ Склад удален');
+        ctx.reply('✅ Склад удален и данные обновлены');
       } else {
         ctx.reply('❌ Склад не найден');
       }
@@ -619,8 +795,8 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      await database.addProduct(name);
-      ctx.reply(`✅ Товар "${name}" добавлен!`);
+      await dataManager.addProductAndReload(name);
+      ctx.reply(`✅ Товар "${name}" добавлен и данные обновлены!`);
     } catch (error) {
       console.error('Ошибка добавления товара:', error);
       ctx.reply('❌ Ошибка при добавлении товара');
@@ -703,10 +879,10 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      const result = await database.removeProduct(id);
+      const result = await dataManager.removeProductAndReload(id);
       
       if (result) {
-        ctx.reply('✅ Товар удален');
+        ctx.reply('✅ Товар удален и данные обновлены');
       } else {
         ctx.reply('❌ Товар не найден');
       }
@@ -725,7 +901,7 @@ function setupAdminCommands(bot) {
     }
     
     const keyboard = [
-      [{ text: '➕ Добавить клиента' }],
+      [{ text: '👥 Управление клиентами' }],
       [{ text: '📋 Список клиентов' }],
       [{ text: '✏️ Изменить данные клиента' }],
       [{ text: '🚫 Заблокировать клиента' }],

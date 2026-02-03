@@ -3,6 +3,7 @@ const { Telegraf, Scenes, session } = require('telegraf');
 const database = require('./database');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
+const dataManager = require('./data-manager');
 
 // 🔧 Загружаем исправления для Order Bot
 const orderBotFixes = require('./fix-order-bot-soft-delete');
@@ -16,30 +17,18 @@ admin.setupAdminCommands(bot);
 // Временное хранилище данных заявки
 const orderData = new Map();
 
-// Загрузка складов и товаров из БД
-let warehouses = [];
-let products = [];
-
+// Загрузка складов и товаров из БД через менеджер данных
 async function loadWarehousesAndProducts() {
-  try {
-    const dbWarehouses = await database.getAllWarehouses();
-    const dbProducts = await database.getAllProducts();
-    
-    warehouses = dbWarehouses.length > 0 
-      ? dbWarehouses.map(w => w.name)
-      : ['Склад №1', 'Склад №2', 'Склад №3', 'Другой'];
-    
-    products = dbProducts.length > 0
-      ? dbProducts.map(p => p.name)
-      : ['Цемент', 'Песок', 'Щебень', 'Кирпич', 'Арматура', 'Другое'];
-    
-    console.log(`✅ Загружено складов: ${warehouses.length}, товаров: ${products.length}`);
-  } catch (error) {
-    console.error('Ошибка загрузки складов и товаров:', error);
-    // Используем значения по умолчанию
-    warehouses = ['Склад №1', 'Склад №2', 'Склад №3', 'Другой'];
-    products = ['Цемент', 'Песок', 'Щебень', 'Кирпич', 'Арматура', 'Другое'];
-  }
+  return await dataManager.loadWarehousesAndProducts();
+}
+
+// Геттеры для получения текущих данных
+function getWarehouses() {
+  return dataManager.warehouses;
+}
+
+function getProducts() {
+  return dataManager.products;
 }
 
 // Загружаем при старте
@@ -177,7 +166,7 @@ bot.hears('📦 Создать заявку', async (ctx) => {
   // Перезагружаем склады из БД
   await loadWarehousesAndProducts();
   
-  const keyboard = warehouses.map(w => [{ text: w }]);
+  const keyboard = getWarehouses().map(w => [{ text: w }]);
   
   ctx.reply(
     '📦 Создание новой заявки\n\n' +
@@ -203,7 +192,7 @@ bot.hears('🏬 Склад', async (ctx) => {
   // Перезагружаем склады из БД
   await loadWarehousesAndProducts();
   
-  const keyboard = warehouses.map(w => [{ text: w }]);
+  const keyboard = getWarehouses().map(w => [{ text: w }]);
   
   ctx.reply(
     '🏬 Выберите склад:',
@@ -219,7 +208,7 @@ bot.hears('👨‍💼 Панель администратора', async (ctx) =
   }
   
   const keyboard = [
-    [{ text: '➕ Добавить клиента' }],
+    [{ text: '👥 Управление клиентами' }],
     [{ text: '📋 Список клиентов' }],
     [{ text: '✏️ Изменить данные клиента' }],
     [{ text: '🚫 Заблокировать клиента' }],
@@ -325,7 +314,7 @@ bot.on('text', async (ctx) => {
     }
     
     // Шаг 1: Выбор склада
-    if (data.step === 'warehouse' && warehouses.includes(text)) {
+    if (data.step === 'warehouse' && getWarehouses().includes(text)) {
       data.warehouse = text;
       data.step = 'product';
       orderData.set(userId, data);
@@ -333,7 +322,7 @@ bot.on('text', async (ctx) => {
       // Перезагружаем товары из БД
       await loadWarehousesAndProducts();
       
-      const keyboard = products.map(p => [{ text: p }]);
+      const keyboard = getProducts().map(p => [{ text: p }]);
       
       return ctx.reply(
         `✅ Склад: ${text}\n\n🛒 Выберите товар:`,
@@ -342,7 +331,7 @@ bot.on('text', async (ctx) => {
     }
 
     // Шаг 2: Выбор товара
-    if (data.step === 'product' && products.includes(text)) {
+    if (data.step === 'product' && getProducts().includes(text)) {
       data.currentProduct = text;
       data.step = 'quantity';
       orderData.set(userId, data);
@@ -397,7 +386,7 @@ bot.on('text', async (ctx) => {
         // Перезагружаем товары из БД
         await loadWarehousesAndProducts();
         
-        const keyboard = products.map(p => [{ text: p }]);
+        const keyboard = getProducts().map(p => [{ text: p }]);
         
         return ctx.reply(
           '🛒 Выберите товар:',
@@ -794,3 +783,6 @@ process.once('SIGTERM', () => {
   bot.stop('SIGTERM');
   database.close();
 });
+
+// Экспортируем функцию для использования в admin.js
+module.exports = { loadWarehousesAndProducts, dataManager };
