@@ -594,6 +594,7 @@ function setupAdminCommands(bot) {
     const keyboard = [
       [{ text: '➕ Добавить склад' }],
       [{ text: '📋 Список складов' }],
+      [{ text: '📱 Настроить WhatsApp группы' }],
       [{ text: '🗑️ Удалить склад' }],
       [{ text: '🔙 Назад в админ-панель' }]
     ];
@@ -664,7 +665,13 @@ function setupAdminCommands(bot) {
       
       let message = '📋 Список складов:\n\n';
       warehouses.forEach((w, index) => {
+        const whatsappStatus = w.whatsapp_group_id ? '✅ WhatsApp настроен' : '❌ WhatsApp не настроен';
         message += `${index + 1}. ${w.name} (ID: ${w.id})\n`;
+        message += `   📱 ${whatsappStatus}\n`;
+        if (w.whatsapp_group_id) {
+          message += `   🆔 Группа: ${w.whatsapp_group_id}\n`;
+        }
+        message += '\n';
       });
       
       ctx.reply(message);
@@ -672,6 +679,143 @@ function setupAdminCommands(bot) {
     } catch (error) {
       console.error('Ошибка получения списка:', error);
       ctx.reply('❌ Ошибка при получении списка складов');
+    }
+  });
+
+  // 📱 Настройка WhatsApp групп для складов
+  bot.hears('📱 Настроить WhatsApp группы', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    try {
+      const warehouses = await database.getAllWarehouses();
+      
+      if (warehouses.length === 0) {
+        return ctx.reply('📋 Сначала добавьте склады');
+      }
+      
+      const keyboard = [
+        [{ text: '🔙 Назад в управление складами' }]
+      ];
+      
+      let message = '📱 Настройка WhatsApp групп для складов\n\n';
+      message += '🎯 Умная маршрутизация заявок:\n';
+      message += 'Каждый склад может иметь свою WhatsApp группу.\n';
+      message += 'Заявки будут автоматически отправляться в нужную группу!\n\n';
+      
+      message += '📋 Текущие склады:\n\n';
+      warehouses.forEach((w, index) => {
+        const status = w.whatsapp_group_id ? '✅' : '❌';
+        message += `${index + 1}. ${status} ${w.name}\n`;
+        if (w.whatsapp_group_id) {
+          message += `   📱 Группа: ${w.whatsapp_group_id}\n`;
+        }
+        message += '\n';
+      });
+      
+      message += '⚙️ Команды управления:\n\n';
+      message += '🔗 Привязать группу к складу:\n';
+      message += '/setwhatsapp Название_склада | ID_группы\n\n';
+      message += '🗑️ Отвязать группу от склада:\n';
+      message += '/removewhatsapp Название_склада\n\n';
+      message += '💡 Примеры:\n';
+      message += '/setwhatsapp Склад №1 | 120363XXXXXXXXXX@g.us\n';
+      message += '/removewhatsapp Склад №1\n\n';
+      message += '📝 Как получить ID группы WhatsApp:\n';
+      message += '1. Добавьте бота Green-API в группу\n';
+      message += '2. Отправьте любое сообщение в группу\n';
+      message += '3. Проверьте логи бота - там будет ID группы';
+      
+      ctx.reply(message, { reply_markup: { keyboard, resize_keyboard: true } });
+      
+    } catch (error) {
+      console.error('Ошибка получения списка:', error);
+      ctx.reply('❌ Ошибка при получении списка складов');
+    }
+  });
+
+  // Команда привязки WhatsApp группы к складу
+  bot.command('setwhatsapp', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const text = ctx.message.text.replace('/setwhatsapp', '').trim();
+    const parts = text.split('|').map(p => p.trim());
+    
+    if (parts.length !== 2) {
+      return ctx.reply(
+        '❌ Неверный формат!\n\n' +
+        'Используйте:\n' +
+        '/setwhatsapp Название_склада | ID_группы\n\n' +
+        'Пример:\n' +
+        '/setwhatsapp Склад №1 | 120363XXXXXXXXXX@g.us'
+      );
+    }
+    
+    const [warehouseName, groupId] = parts;
+    
+    try {
+      const updated = await database.updateWarehouseWhatsApp(warehouseName, groupId);
+      
+      if (updated) {
+        ctx.reply(
+          '✅ WhatsApp группа привязана к складу!\n\n' +
+          `🏬 Склад: ${warehouseName}\n` +
+          `📱 WhatsApp группа: ${groupId}\n\n` +
+          `🎯 Теперь все заявки для склада "${warehouseName}" будут автоматически отправляться в эту WhatsApp группу!`
+        );
+      } else {
+        ctx.reply(`❌ Склад "${warehouseName}" не найден`);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка привязки WhatsApp группы:', error);
+      ctx.reply('❌ Ошибка при привязке WhatsApp группы');
+    }
+  });
+
+  // Команда отвязки WhatsApp группы от склада
+  bot.command('removewhatsapp', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const warehouseName = ctx.message.text.replace('/removewhatsapp', '').trim();
+    
+    if (!warehouseName) {
+      return ctx.reply(
+        '❌ Укажите название склада!\n\n' +
+        'Используйте:\n' +
+        '/removewhatsapp Название_склада\n\n' +
+        'Пример:\n' +
+        '/removewhatsapp Склад №1'
+      );
+    }
+    
+    try {
+      const updated = await database.updateWarehouseWhatsApp(warehouseName, null);
+      
+      if (updated) {
+        ctx.reply(
+          '✅ WhatsApp группа отвязана от склада!\n\n' +
+          `🏬 Склад: ${warehouseName}\n\n` +
+          `📤 Теперь заявки для этого склада будут отправляться в общую группу WhatsApp.`
+        );
+      } else {
+        ctx.reply(`❌ Склад "${warehouseName}" не найден`);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка отвязки WhatsApp группы:', error);
+      ctx.reply('❌ Ошибка при отвязке WhatsApp группы');
     }
   });
   

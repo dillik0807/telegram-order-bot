@@ -82,6 +82,7 @@ class Database {
         CREATE TABLE IF NOT EXISTS warehouses (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL UNIQUE,
+          whatsapp_group_id TEXT,
           is_active INTEGER DEFAULT 1,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -452,14 +453,42 @@ class Database {
   }
 
   // Управление складами
-  addWarehouse(name) {
+  addWarehouse(name, whatsappGroupId = null) {
     return new Promise((resolve, reject) => {
       this.db.run(
-        'INSERT INTO warehouses (name) VALUES (?)',
-        [name],
+        'INSERT INTO warehouses (name, whatsapp_group_id) VALUES (?, ?)',
+        [name, whatsappGroupId],
         function(err) {
           if (err) return reject(err);
           resolve(this.lastID);
+        }
+      );
+    });
+  }
+
+  // Обновить WhatsApp группу склада
+  updateWarehouseWhatsApp(warehouseName, whatsappGroupId) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        'UPDATE warehouses SET whatsapp_group_id = ? WHERE name = ? AND is_active = 1',
+        [whatsappGroupId, warehouseName],
+        function(err) {
+          if (err) return reject(err);
+          resolve(this.changes > 0);
+        }
+      );
+    });
+  }
+
+  // Получить WhatsApp группу склада
+  getWarehouseWhatsApp(warehouseName) {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        'SELECT whatsapp_group_id FROM warehouses WHERE name = ? AND is_active = 1',
+        [warehouseName],
+        (err, row) => {
+          if (err) return reject(err);
+          resolve(row ? row.whatsapp_group_id : null);
         }
       );
     });

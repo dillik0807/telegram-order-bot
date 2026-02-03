@@ -565,35 +565,48 @@ bot.on('text', async (ctx) => {
         }
       }
 
-      // Отправка в WhatsApp через Green-API
+      // 🎯 УМНАЯ МАРШРУТИЗАЦИЯ WhatsApp по складам
       let whatsappSent = false;
-      const whatsappGroupId = process.env.WHATSAPP_GROUP_ID;
-      const whatsappRecipient = process.env.WHATSAPP_RECIPIENT;
       
-      if (whatsappGroupId) {
-        // Отправка в WhatsApp группу
-        try {
-          whatsappSent = await whatsapp.sendToGroup(orderMessage, whatsappGroupId);
-        } catch (error) {
-          console.error('❌ Ошибка отправки в WhatsApp группу:', error);
+      try {
+        // Получаем WhatsApp группу для выбранного склада
+        const warehouseWhatsAppGroup = await database.getWarehouseWhatsApp(data.warehouse);
+        
+        if (warehouseWhatsAppGroup) {
+          // Отправляем в группу конкретного склада
+          console.log(`📤 Отправка заявки в WhatsApp группу склада "${data.warehouse}": ${warehouseWhatsAppGroup}`);
+          whatsappSent = await whatsapp.sendToGroup(orderMessage, warehouseWhatsAppGroup);
+          
+          if (whatsappSent) {
+            console.log(`✅ Заявка отправлена в WhatsApp группу склада "${data.warehouse}"`);
+          }
+        } else {
+          // Если у склада нет привязанной группы - отправляем в общую группу
+          console.log(`⚠️ У склада "${data.warehouse}" нет привязанной WhatsApp группы, отправляем в общую`);
+          
+          const whatsappGroupId = process.env.WHATSAPP_GROUP_ID;
+          const whatsappRecipient = process.env.WHATSAPP_RECIPIENT;
+          
+          if (whatsappGroupId) {
+            // Отправка в общую WhatsApp группу
+            whatsappSent = await whatsapp.sendToGroup(orderMessage, whatsappGroupId);
+          } else if (whatsappRecipient) {
+            // Отправка личному получателю
+            whatsappSent = await whatsapp.sendMessage(orderMessage);
+          }
         }
-      } else if (whatsappRecipient) {
-        // Отправка личному получателю
-        try {
-          whatsappSent = await whatsapp.sendMessage(orderMessage);
-        } catch (error) {
-          console.error('❌ Ошибка отправки в WhatsApp:', error);
-        }
+      } catch (error) {
+        console.error('❌ Ошибка отправки в WhatsApp:', error);
       }
       
       // Уведомление пользователя
       let statusMessage = '';
       if (telegramSent && whatsappSent) {
-        statusMessage = '✅ Заявка отправлена в Telegram и WhatsApp!';
+        statusMessage = `✅ Заявка отправлена в Telegram и WhatsApp группу склада "${data.warehouse}"!`;
       } else if (telegramSent) {
         statusMessage = '✅ Заявка отправлена в Telegram группу!';
       } else if (whatsappSent) {
-        statusMessage = '✅ Заявка отправлена в WhatsApp!';
+        statusMessage = `✅ Заявка отправлена в WhatsApp группу склада "${data.warehouse}"!`;
       } else {
         statusMessage = '⚠️ Заявка сохранена в базе данных';
       }
