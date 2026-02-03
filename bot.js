@@ -19,6 +19,14 @@ const orderData = new Map();
 
 // Загрузка складов и товаров из БД через менеджер данных
 async function loadWarehousesAndProducts() {
+  // 🚀 Автоматическая миграция для Railway
+  try {
+    const { migrateRailway } = require('./migrate-railway');
+    await migrateRailway();
+  } catch (error) {
+    console.log('⚠️ Миграция пропущена:', error.message);
+  }
+  
   return await dataManager.loadWarehousesAndProducts();
 }
 
