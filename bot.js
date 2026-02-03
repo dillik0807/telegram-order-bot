@@ -109,6 +109,17 @@ async function loadWarehousesAndProducts() {
   return await dataManager.loadWarehousesAndProducts();
 }
 
+// 🔄 Функция для принудительного обновления данных
+async function reloadWarehousesAndProducts() {
+  console.log('🔄 Принудительное обновление данных складов и товаров...');
+  try {
+    await dataManager.loadWarehousesAndProducts();
+    console.log('✅ Данные обновлены успешно');
+  } catch (error) {
+    console.error('❌ Ошибка обновления данных:', error);
+  }
+}
+
 // Геттеры для получения текущих данных
 function getWarehouses() {
   return dataManager.warehouses;
@@ -250,8 +261,9 @@ bot.hears('📦 Создать заявку', async (ctx) => {
   // Начинаем процесс создания заявки
   orderData.set(userId, { items: [], step: 'warehouse' });
   
-  // Перезагружаем склады из БД
-  await loadWarehousesAndProducts();
+  // 🔄 Всегда загружаем свежие данные складов из БД
+  console.log('🔄 Обновление списка складов из БД...');
+  await reloadWarehousesAndProducts();
   
   const keyboard = getWarehouses().map(w => [{ text: w }]);
   
@@ -276,8 +288,9 @@ bot.hears('🏬 Склад', async (ctx) => {
   // Начинаем процесс создания заявки
   orderData.set(userId, { items: [], step: 'warehouse' });
   
-  // Перезагружаем склады из БД
-  await loadWarehousesAndProducts();
+  // 🔄 Всегда загружаем свежие данные складов из БД
+  console.log('🔄 Обновление списка складов из БД...');
+  await reloadWarehousesAndProducts();
   
   const keyboard = getWarehouses().map(w => [{ text: w }]);
   
@@ -406,7 +419,8 @@ bot.on('text', async (ctx) => {
       data.step = 'product';
       orderData.set(userId, data);
       
-      // Перезагружаем товары из БД
+      // 🔄 Обновляем товары из БД перед показом
+      console.log('🔄 Обновление списка товаров из БД...');
       await loadWarehousesAndProducts();
       
       const keyboard = getProducts().map(p => [{ text: p }]);
@@ -470,7 +484,8 @@ bot.on('text', async (ctx) => {
         data.step = 'product';
         orderData.set(userId, data);
         
-        // Перезагружаем товары из БД
+        // 🔄 Обновляем товары из БД перед показом
+        console.log('🔄 Обновление списка товаров из БД...');
         await loadWarehousesAndProducts();
         
         const keyboard = getProducts().map(p => [{ text: p }]);

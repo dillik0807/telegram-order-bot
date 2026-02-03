@@ -49,8 +49,8 @@ function setupAdminCommands(bot) {
     );
   });
 
-  // 🧪 Команда для проверки складов
-  bot.command('checkwarehouses', async (ctx) => {
+  // 🔄 Команда для принудительного обновления данных
+  bot.command('reloaddata', async (ctx) => {
     const userId = ctx.from.id;
     
     if (!isAdmin(userId)) {
@@ -58,54 +58,47 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      console.log('📋 Получение списка складов из БД...');
+      console.log(`🔄 Принудительное обновление данных по запросу админа ${userId}`);
+      
+      ctx.reply('🔄 Обновление данных из базы данных...');
+      
+      // Обновляем данные
+      await dataManager.loadWarehousesAndProducts();
+      
+      // Получаем актуальные данные
       const warehouses = await database.getAllWarehouses();
+      const products = await database.getAllProducts();
       
-      if (warehouses.length === 0) {
-        return ctx.reply('📋 Складов в базе данных нет');
-      }
+      let message = '✅ Данные успешно обновлены!\n\n';
+      message += `📦 Складов: ${warehouses.length}\n`;
+      message += `🛒 Товаров: ${products.length}\n\n`;
       
-      let message = `📋 Склады в базе данных (${warehouses.length}):\n\n`;
-      
-      warehouses.forEach((w, index) => {
+      message += '🏬 Склады:\n';
+      warehouses.slice(0, 10).forEach((w, index) => {
         const whatsappStatus = w.whatsapp_group_id ? '✅' : '❌';
-        message += `${index + 1}. ${w.name} (ID: ${w.id})\n`;
-        message += `   📱 WhatsApp: ${whatsappStatus}\n`;
-        if (w.whatsapp_group_id) {
-          message += `   🆔 ${w.whatsapp_group_id}\n`;
-        }
-        message += '\n';
+        message += `${index + 1}. ${w.name} ${whatsappStatus}\n`;
       });
       
-      // Разбиваем длинное сообщение если нужно
-      if (message.length > 4000) {
-        const parts = [];
-        let currentPart = '';
-        const lines = message.split('\n');
-        
-        for (const line of lines) {
-          if (currentPart.length + line.length > 3800) {
-            parts.push(currentPart);
-            currentPart = line + '\n';
-          } else {
-            currentPart += line + '\n';
-          }
-        }
-        
-        if (currentPart.trim()) {
-          parts.push(currentPart);
-        }
-        
-        for (const part of parts) {
-          await ctx.reply(part);
-        }
-      } else {
-        ctx.reply(message);
+      if (warehouses.length > 10) {
+        message += `... и еще ${warehouses.length - 10} складов\n`;
       }
       
+      message += '\n🛒 Товары:\n';
+      products.slice(0, 10).forEach((p, index) => {
+        message += `${index + 1}. ${p.name}\n`;
+      });
+      
+      if (products.length > 10) {
+        message += `... и еще ${products.length - 10} товаров\n`;
+      }
+      
+      message += '\n💡 Теперь при создании заявок будут доступны все актуальные данные!';
+      
+      ctx.reply(message);
+      
     } catch (error) {
-      console.error('❌ Ошибка получения складов:', error);
-      ctx.reply(`❌ Ошибка получения складов: ${error.message}`);
+      console.error('❌ Ошибка обновления данных:', error);
+      ctx.reply(`❌ Ошибка обновления данных: ${error.message}`);
     }
   });
   
@@ -698,7 +691,7 @@ function setupAdminCommands(bot) {
     );
   });
   
-  // 🔧 Простая команда добавления склада (обходит проблемы с dataManager)
+  // 🔧 Улучшенная команда добавления склада с проверкой дубликатов
   bot.command('addwarehouse2', async (ctx) => {
     const userId = ctx.from.id;
     
@@ -718,9 +711,35 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      console.log(`➕ Прямое добавление склада "${name}" в базу данных...`);
+      console.log(`🔍 Проверка существующих складов...`);
       
-      // Прямое добавление через database.js
+      // Сначала проверяем, существует ли уже такой склад
+      const existingWarehouses = await database.getAllWarehouses();
+      const existingWarehouse = existingWarehouses.find(w => 
+        w.name.toLowerCase() === name.toLowerCase()
+      );
+      
+      if (existingWarehouse) {
+        console.log(`⚠️ Склад "${name}" уже существует с ID: ${existingWarehouse.id}`);
+        
+        const whatsappStatus = existingWarehouse.whatsapp_group_id ? 
+          `✅ настроен (${existingWarehouse.whatsapp_group_id})` : 
+          '❌ не настроен';
+        
+        return ctx.reply(
+          `⚠️ Склад "${name}" уже существует!\n\n` +
+          `🆔 ID: ${existingWarehouse.id}\n` +
+          `📱 WhatsApp: ${whatsappStatus}\n` +
+          `📅 Создан: ${new Date(existingWarehouse.created_at).toLocaleDateString('ru-RU')}\n\n` +
+          `💡 Для настройки WhatsApp группы используйте:\n` +
+          `/setwhatsapp ${name} | ID_группы\n\n` +
+          `📋 Посмотреть все склады: /checkwarehouses`
+        );
+      }
+      
+      console.log(`➕ Склад "${name}" не существует, добавляем...`);
+      
+      // Добавляем новый склад
       const warehouseId = await database.addWarehouse(name, null);
       
       console.log(`✅ Склад "${name}" добавлен с ID: ${warehouseId}`);
@@ -729,17 +748,28 @@ function setupAdminCommands(bot) {
         `✅ Склад "${name}" успешно добавлен!\n\n` +
         `🆔 ID: ${warehouseId}\n` +
         `📱 WhatsApp: не настроен\n\n` +
-        `Для настройки WhatsApp группы используйте:\n` +
-        `/setwhatsapp ${name} | ID_группы`
+        `💡 Для настройки WhatsApp группы используйте:\n` +
+        `/setwhatsapp ${name} | ID_группы\n\n` +
+        `📋 Посмотреть все склады: /checkwarehouses`
       );
       
     } catch (error) {
       console.error('❌ Ошибка добавления склада:', error);
-      ctx.reply(
-        `❌ Ошибка при добавлении склада:\n\n` +
-        `${error.message}\n\n` +
-        `Попробуйте другое название или обратитесь к разработчику.`
-      );
+      
+      if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint')) {
+        ctx.reply(
+          `❌ Склад с названием "${name}" уже существует!\n\n` +
+          `📋 Посмотрите список существующих складов:\n` +
+          `/checkwarehouses\n\n` +
+          `💡 Попробуйте другое название или используйте существующий склад.`
+        );
+      } else {
+        ctx.reply(
+          `❌ Ошибка при добавлении склада:\n\n` +
+          `${error.message}\n\n` +
+          `Попробуйте другое название или обратитесь к разработчику.`
+        );
+      }
     }
   });
   
