@@ -19,17 +19,93 @@ const orderData = new Map();
 
 // Загрузка складов и товаров из БД через менеджер данных
 async function loadWarehousesAndProducts() {
-  // 🚀 Надежная миграция для Railway
+  // 🚀 Простая миграция через существующее подключение
   try {
-    console.log('🔧 Запуск миграции Railway...');
-    const { railwayMigration } = require('./railway-migration');
-    await railwayMigration();
-    console.log('✅ Миграция Railway завершена');
+    console.log('🔧 Проверка и настройка маршрутизации...');
+    
+    // Проверяем, нужна ли миграция
+    let needsMigration = false;
+    try {
+      // Пробуем получить WhatsApp группу - если ошибка, значит колонки нет
+      await database.getWarehouseWhatsApp('ЧБалхи');
+      console.log('✅ Колонка whatsapp_group_id существует');
+    } catch (error) {
+      if (error.code === 'SQLITE_ERROR' && error.message.includes('no such column')) {
+        needsMigration = true;
+        console.log('⚠️ Колонка whatsapp_group_id не найдена, нужна миграция');
+      } else {
+        console.log('⚠️ Другая ошибка при проверке колонки:', error.message);
+      }
+    }
+    
+    // Если нужна миграция, выполняем её через отдельное подключение
+    if (needsMigration) {
+      console.log('➕ Выполняем миграцию базы данных...');
+      
+      const sqlite3 = require('sqlite3').verbose();
+      const dbPath = process.env.DB_PATH || './orders.db';
+      
+      await new Promise((resolve, reject) => {
+        const migrationDb = new sqlite3.Database(dbPath, (err) => {
+          if (err) {
+            console.error('❌ Ошибка подключения для миграции:', err);
+            reject(err);
+            return;
+          }
+          
+          console.log('✅ Подключение для миграции создано');
+          
+          // Добавляем колонку
+          migrationDb.run("ALTER TABLE warehouses ADD COLUMN whatsapp_group_id TEXT", (err) => {
+            migrationDb.close(); // Сразу закрываем миграционное подключение
+            
+            if (err) {
+              console.error('❌ Ошибка добавления колонки:', err);
+              reject(err);
+            } else {
+              console.log('✅ Колонка whatsapp_group_id добавлена!');
+              resolve();
+            }
+          });
+        });
+      });
+      
+      // Небольшая задержка после миграции
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    // Настраиваем маршрутизацию через основное подключение database.js
+    console.log('🎯 Настройка маршрутизации складов...');
+    
+    try {
+      const balkhiUpdated = await database.updateWarehouseWhatsApp('ЧБалхи', '120363419535622239@g.us');
+      if (balkhiUpdated) {
+        console.log('✅ ЧБалхи → Бахор ойл склад');
+      } else {
+        console.log('⚠️ Склад ЧБалхи не найден');
+      }
+    } catch (error) {
+      console.log('❌ Ошибка настройки ЧБалхи:', error.message);
+    }
+    
+    try {
+      const zavodUpdated = await database.updateWarehouseWhatsApp('ЗаводТЧ', '120363422710745455@g.us');
+      if (zavodUpdated) {
+        console.log('✅ ЗаводТЧ → точик азод');
+      } else {
+        console.log('⚠️ Склад ЗаводТЧ не найден');
+      }
+    } catch (error) {
+      console.log('❌ Ошибка настройки ЗаводТЧ:', error.message);
+    }
+    
+    console.log('🎉 Настройка маршрутизации завершена!');
+    
   } catch (error) {
-    console.log('⚠️ Ошибка миграции Railway:', error.message);
-    console.log('📤 Продолжаем работу с общей группой WhatsApp');
+    console.log('⚠️ Ошибка настройки маршрутизации:', error.message);
   }
   
+  // Загружаем данные через dataManager
   return await dataManager.loadWarehousesAndProducts();
 }
 
