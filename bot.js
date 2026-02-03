@@ -19,12 +19,59 @@ const orderData = new Map();
 
 // Загрузка складов и товаров из БД через менеджер данных
 async function loadWarehousesAndProducts() {
-  // 🚀 Автоматическая миграция для Railway
+  // 🚀 Простая миграция для Railway
   try {
-    const { migrateRailway } = require('./migrate-railway');
-    await migrateRailway();
+    console.log('🔧 Проверка и настройка WhatsApp маршрутизации...');
+    
+    // Проверяем, есть ли колонка whatsapp_group_id
+    try {
+      await database.getWarehouseWhatsApp('ЧБалхи');
+      console.log('✅ Колонка whatsapp_group_id существует');
+    } catch (error) {
+      if (error.message.includes('no such column')) {
+        console.log('➕ Добавляем колонку whatsapp_group_id...');
+        const sqlite3 = require('sqlite3').verbose();
+        const dbPath = process.env.DB_PATH || './orders.db';
+        const db = new sqlite3.Database(dbPath);
+        
+        await new Promise((resolve, reject) => {
+          db.run("ALTER TABLE warehouses ADD COLUMN whatsapp_group_id TEXT", (err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+        db.close();
+        console.log('✅ Колонка whatsapp_group_id добавлена!');
+      }
+    }
+    
+    // Настраиваем маршрутизацию
+    console.log('🎯 Настройка маршрутизации складов...');
+    
+    // ЧБалхи → Бахор ойл склад
+    const balkhiUpdated = await database.updateWarehouseWhatsApp('ЧБалхи', '120363419535622239@g.us');
+    if (balkhiUpdated) {
+      console.log('✅ ЧБалхи → Бахор ойл склад');
+    }
+    
+    // ЗаводТЧ → точик азод
+    const zavodUpdated = await database.updateWarehouseWhatsApp('ЗаводТЧ', '120363422710745455@g.us');
+    if (zavodUpdated) {
+      console.log('✅ ЗаводТЧ → точик азод');
+    } else {
+      // Добавляем склад если не существует
+      try {
+        await database.addWarehouse('ЗаводТЧ', '120363422710745455@g.us');
+        console.log('✅ ЗаводТЧ добавлен → точик азод');
+      } catch (e) {
+        console.log('⚠️ ЗаводТЧ уже существует');
+      }
+    }
+    
+    console.log('🎉 Маршрутизация настроена!');
+    
   } catch (error) {
-    console.log('⚠️ Миграция пропущена:', error.message);
+    console.log('⚠️ Ошибка настройки маршрутизации:', error.message);
   }
   
   return await dataManager.loadWarehousesAndProducts();
@@ -577,8 +624,12 @@ bot.on('text', async (ctx) => {
       let whatsappSent = false;
       
       try {
+        console.log(`🔍 Проверка маршрутизации для склада: "${data.warehouse}"`);
+        
         // Получаем WhatsApp группу для выбранного склада
         const warehouseWhatsAppGroup = await database.getWarehouseWhatsApp(data.warehouse);
+        
+        console.log(`📱 WhatsApp группа для склада "${data.warehouse}": ${warehouseWhatsAppGroup || 'не найдена'}`);
         
         if (warehouseWhatsAppGroup) {
           // Отправляем в группу конкретного склада
@@ -587,6 +638,8 @@ bot.on('text', async (ctx) => {
           
           if (whatsappSent) {
             console.log(`✅ Заявка отправлена в WhatsApp группу склада "${data.warehouse}"`);
+          } else {
+            console.log(`❌ Ошибка отправки в группу склада "${data.warehouse}"`);
           }
         } else {
           // Если у склада нет привязанной группы - отправляем в общую группу
@@ -595,11 +648,16 @@ bot.on('text', async (ctx) => {
           const whatsappGroupId = process.env.WHATSAPP_GROUP_ID;
           const whatsappRecipient = process.env.WHATSAPP_RECIPIENT;
           
+          console.log(`📋 Общая группа: ${whatsappGroupId || 'не настроена'}`);
+          console.log(`📋 Получатель: ${whatsappRecipient || 'не настроен'}`);
+          
           if (whatsappGroupId) {
             // Отправка в общую WhatsApp группу
+            console.log(`📤 Отправка в общую WhatsApp группу: ${whatsappGroupId}`);
             whatsappSent = await whatsapp.sendToGroup(orderMessage, whatsappGroupId);
           } else if (whatsappRecipient) {
             // Отправка личному получателю
+            console.log(`📤 Отправка личному получателю: ${whatsappRecipient}`);
             whatsappSent = await whatsapp.sendMessage(orderMessage);
           }
         }
