@@ -24,48 +24,80 @@ async function loadWarehousesAndProducts() {
     console.log('🔧 Проверка и настройка WhatsApp маршрутизации...');
     
     // Проверяем, есть ли колонка whatsapp_group_id
+    let needsMigration = false;
     try {
       await database.getWarehouseWhatsApp('ЧБалхи');
       console.log('✅ Колонка whatsapp_group_id существует');
     } catch (error) {
-      if (error.message.includes('no such column')) {
-        console.log('➕ Добавляем колонку whatsapp_group_id...');
-        const sqlite3 = require('sqlite3').verbose();
-        const dbPath = process.env.DB_PATH || './orders.db';
-        const db = new sqlite3.Database(dbPath);
-        
-        await new Promise((resolve, reject) => {
-          db.run("ALTER TABLE warehouses ADD COLUMN whatsapp_group_id TEXT", (err) => {
-            if (err) reject(err);
-            else resolve();
-          });
-        });
-        db.close();
-        console.log('✅ Колонка whatsapp_group_id добавлена!');
+      if (error.message.includes('no such column') || error.code === 'SQLITE_ERROR') {
+        needsMigration = true;
+        console.log('➕ Колонка whatsapp_group_id не найдена, добавляем...');
+      } else {
+        throw error;
       }
+    }
+    
+    // Добавляем колонку если нужно
+    if (needsMigration) {
+      const sqlite3 = require('sqlite3').verbose();
+      const dbPath = process.env.DB_PATH || './orders.db';
+      
+      console.log(`📂 Путь к БД: ${dbPath}`);
+      
+      const db = new sqlite3.Database(dbPath, (err) => {
+        if (err) {
+          console.error('❌ Ошибка подключения к БД для миграции:', err);
+        } else {
+          console.log('✅ Подключение к БД для миграции успешно');
+        }
+      });
+      
+      await new Promise((resolve, reject) => {
+        db.run("ALTER TABLE warehouses ADD COLUMN whatsapp_group_id TEXT", (err) => {
+          if (err) {
+            console.error('❌ Ошибка добавления колонки:', err);
+            reject(err);
+          } else {
+            console.log('✅ Колонка whatsapp_group_id добавлена!');
+            resolve();
+          }
+        });
+      });
+      
+      db.close();
     }
     
     // Настраиваем маршрутизацию
     console.log('🎯 Настройка маршрутизации складов...');
     
     // ЧБалхи → Бахор ойл склад
-    const balkhiUpdated = await database.updateWarehouseWhatsApp('ЧБалхи', '120363419535622239@g.us');
-    if (balkhiUpdated) {
-      console.log('✅ ЧБалхи → Бахор ойл склад');
+    try {
+      const balkhiUpdated = await database.updateWarehouseWhatsApp('ЧБалхи', '120363419535622239@g.us');
+      if (balkhiUpdated) {
+        console.log('✅ ЧБалхи → Бахор ойл склад');
+      } else {
+        console.log('⚠️ Склад ЧБалхи не найден');
+      }
+    } catch (error) {
+      console.log('❌ Ошибка настройки ЧБалхи:', error.message);
     }
     
     // ЗаводТЧ → точик азод
-    const zavodUpdated = await database.updateWarehouseWhatsApp('ЗаводТЧ', '120363422710745455@g.us');
-    if (zavodUpdated) {
-      console.log('✅ ЗаводТЧ → точик азод');
-    } else {
-      // Добавляем склад если не существует
-      try {
-        await database.addWarehouse('ЗаводТЧ', '120363422710745455@g.us');
-        console.log('✅ ЗаводТЧ добавлен → точик азод');
-      } catch (e) {
-        console.log('⚠️ ЗаводТЧ уже существует');
+    try {
+      const zavodUpdated = await database.updateWarehouseWhatsApp('ЗаводТЧ', '120363422710745455@g.us');
+      if (zavodUpdated) {
+        console.log('✅ ЗаводТЧ → точик азод');
+      } else {
+        // Добавляем склад если не существует
+        try {
+          await database.addWarehouse('ЗаводТЧ', '120363422710745455@g.us');
+          console.log('✅ ЗаводТЧ добавлен → точик азод');
+        } catch (e) {
+          console.log('⚠️ Ошибка добавления ЗаводТЧ:', e.message);
+        }
       }
+    } catch (error) {
+      console.log('❌ Ошибка настройки ЗаводТЧ:', error.message);
     }
     
     console.log('🎉 Маршрутизация настроена!');
@@ -627,7 +659,16 @@ bot.on('text', async (ctx) => {
         console.log(`🔍 Проверка маршрутизации для склада: "${data.warehouse}"`);
         
         // Получаем WhatsApp группу для выбранного склада
-        const warehouseWhatsAppGroup = await database.getWarehouseWhatsApp(data.warehouse);
+        let warehouseWhatsAppGroup = null;
+        try {
+          warehouseWhatsAppGroup = await database.getWarehouseWhatsApp(data.warehouse);
+        } catch (error) {
+          if (error.code === 'SQLITE_ERROR' && error.message.includes('no such column')) {
+            console.log(`⚠️ Колонка whatsapp_group_id не существует, используем общую группу`);
+          } else {
+            console.log(`⚠️ Ошибка получения WhatsApp группы: ${error.message}`);
+          }
+        }
         
         console.log(`📱 WhatsApp группа для склада "${data.warehouse}": ${warehouseWhatsAppGroup || 'не найдена'}`);
         
