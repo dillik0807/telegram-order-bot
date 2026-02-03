@@ -107,7 +107,7 @@ function setupAdminCommands(bot) {
         return ctx.editMessageText('❌ Запрос уже обработан или не найден');
       }
       
-      // Одобряем клиента
+      // Одобряем клиента с пустым телефоном - клиент заполнит при первой заявке
       await database.approveClient(clientId, request.name, '', userId);
       
       await ctx.answerCbQuery('✅ Клиент одобрен!');
@@ -115,7 +115,8 @@ function setupAdminCommands(bot) {
         `✅ Клиент одобрен!\n\n` +
         `👤 Имя: ${request.name}\n` +
         `🆔 ID: ${clientId}\n` +
-        `✅ Одобрил: ${ctx.from.first_name}`
+        `✅ Одобрил: ${ctx.from.first_name}\n\n` +
+        `📝 Клиент заполнит контактные данные при создании первой заявки.`
       );
       
       // Уведомление клиенту
@@ -124,6 +125,7 @@ function setupAdminCommands(bot) {
           clientId,
           '✅ Ваша регистрация одобрена!\n\n' +
           'Теперь вы можете создавать заявки.\n' +
+          'При создании первой заявки вам нужно будет указать ваше имя и телефон.\n\n' +
           'Отправьте /start для начала работы.'
         );
       } catch (error) {
@@ -199,8 +201,13 @@ function setupAdminCommands(bot) {
       
       let message = '📋 Список клиентов:\n\n';
       clients.forEach((client, index) => {
-        message += `${index + 1}. ${client.name}\n`;
-        message += `   📞 ${client.phone}\n`;
+        const name = client.name || 'Не указано';
+        const phone = client.phone || 'Не указан';
+        const status = (!client.name || !client.phone || client.name.trim() === '' || client.phone.trim() === '') 
+          ? ' ⚠️ (неполные данные)' : '';
+        
+        message += `${index + 1}. ${name}${status}\n`;
+        message += `   📞 ${phone}\n`;
         message += `   🆔 ID: ${client.telegram_id}\n`;
         message += `   📅 Добавлен: ${new Date(client.created_at).toLocaleDateString('ru-RU')}\n\n`;
       });

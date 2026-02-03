@@ -4,6 +4,10 @@ const database = require('./database');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 
+// 🔧 Загружаем исправления для Order Bot
+const orderBotFixes = require('./fix-order-bot-soft-delete');
+console.log('🔧 Исправления Order Bot загружены');
+
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 // Настройка команд администратора
@@ -405,8 +409,8 @@ bot.on('text', async (ctx) => {
         // Проверяем, есть ли сохраненные данные клиента
         const client = await database.getClient(userId);
         
-        if (client && client.name && client.phone) {
-          // Данные уже есть - сразу запрашиваем транспорт
+        if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
+          // Данные уже есть и заполнены - сразу запрашиваем транспорт
           data.name = client.name;
           data.phone = client.phone;
           data.step = 'transport';
@@ -424,7 +428,7 @@ bot.on('text', async (ctx) => {
           
           return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
         } else {
-          // Первый раз - запрашиваем имя и телефон
+          // Данные не заполнены или клиент новый - запрашиваем имя и телефон
           data.step = 'name';
           orderData.set(userId, data);
           
@@ -434,31 +438,74 @@ bot.on('text', async (ctx) => {
           data.items.forEach((item, i) => {
             summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
           });
-          summary += '\n📝 Заполните контактные данные:\n\n';
-          summary += 'Введите ваше имя:';
+          
+          if (client && client.name && client.name.trim() !== '') {
+            summary += '\n📝 Обновите ваши контактные данные:\n\n';
+            summary += `Ваше текущее имя: ${client.name}\n`;
+            summary += 'Введите новое имя или отправьте "-" чтобы оставить текущее:';
+          } else {
+            summary += '\n📝 Заполните контактные данные:\n\n';
+            summary += 'Введите ваше имя:';
+          }
           
           return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
         }
       }
     }
 
-    // Шаг 5: Имя (если первый раз)
+    // Шаг 5: Имя (если первый раз или обновление)
     if (data.step === 'name') {
-      data.name = text;
+      let finalName = text;
+      
+      // Если пользователь отправил "-", используем существующее имя
+      if (text === '-') {
+        const client = await database.getClient(userId);
+        if (client && client.name && client.name.trim() !== '') {
+          finalName = client.name;
+        } else {
+          return ctx.reply('❌ У вас нет сохраненного имени. Введите ваше имя:');
+        }
+      }
+      
+      data.name = finalName;
       data.step = 'phone';
       orderData.set(userId, data);
-      return ctx.reply('📞 Введите ваш номер телефона:\n(например: +992900000000)');
+      
+      // Проверяем, есть ли сохраненный телефон
+      const client = await database.getClient(userId);
+      if (client && client.phone && client.phone.trim() !== '') {
+        return ctx.reply(
+          `📞 Ваш текущий телефон: ${client.phone}\n\n` +
+          'Введите новый номер телефона или отправьте "-" чтобы оставить текущий:\n' +
+          '(например: +992900000000)'
+        );
+      } else {
+        return ctx.reply('📞 Введите ваш номер телефона:\n(например: +992900000000)');
+      }
     }
 
-    // Шаг 6: Телефон (если первый раз)
+    // Шаг 6: Телефон (если первый раз или обновление)
     if (data.step === 'phone') {
-      data.phone = text;
+      let finalPhone = text;
+      
+      // Если пользователь отправил "-", используем существующий телефон
+      if (text === '-') {
+        const client = await database.getClient(userId);
+        if (client && client.phone && client.phone.trim() !== '') {
+          finalPhone = client.phone;
+        } else {
+          return ctx.reply('❌ У вас нет сохраненного телефона. Введите ваш номер телефона:');
+        }
+      }
+      
+      data.phone = finalPhone;
       data.step = 'transport';
       orderData.set(userId, data);
       
       // Сохраняем имя и телефон в базу данных
       try {
         await database.updateClient(userId, data.name, data.phone);
+        console.log(`✅ Обновлены данные клиента ${userId}: ${data.name}, ${data.phone}`);
       } catch (error) {
         console.error('Ошибка сохранения данных клиента:', error);
       }
