@@ -341,8 +341,23 @@ function setupAdminCommands(bot) {
         return ctx.editMessageText('❌ Запрос уже обработан или не найден');
       }
       
+      // 🔍 Проверяем, не существует ли уже такой клиент
+      const existingClient = await database.getClient(clientId);
+      if (existingClient) {
+        await ctx.answerCbQuery('⚠️ Клиент уже существует');
+        return ctx.editMessageText(
+          `⚠️ Клиент уже существует в базе!\n\n` +
+          `👤 Имя: ${existingClient.name || 'Не указано'}\n` +
+          `📞 Телефон: ${existingClient.phone || 'Не указан'}\n` +
+          `🆔 ID: ${clientId}\n\n` +
+          `Запрос был обработан ранее.`
+        );
+      }
+      
       // Одобряем клиента с пустым телефоном - клиент заполнит при первой заявке
       await database.approveClient(clientId, request.name, '', userId);
+      
+      console.log(`✅ Клиент ${clientId} (${request.name}) одобрен администратором ${userId}`);
       
       await ctx.answerCbQuery('✅ Клиент одобрен!');
       await ctx.editMessageText(
@@ -689,6 +704,82 @@ function setupAdminCommands(bot) {
       '/setwhatsapp Название | ID_группы',
       { reply_markup: { keyboard, resize_keyboard: true } }
     );
+  });
+  
+  // 🔍 Команда проверки складов
+  bot.command('checkwarehouses', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    console.log(`🔍 Команда /checkwarehouses от пользователя ${userId}`);
+    
+    if (!isAdmin(userId)) {
+      console.log(`❌ Пользователь ${userId} не является администратором`);
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    try {
+      console.log(`📋 Получение списка складов из БД...`);
+      
+      const warehouses = await database.getAllWarehouses();
+      
+      console.log(`✅ Найдено складов: ${warehouses.length}`);
+      
+      if (warehouses.length === 0) {
+        return ctx.reply(
+          '📋 Список складов пуст\n\n' +
+          '💡 Добавьте склад командой:\n' +
+          '/addwarehouse2 Название_склада'
+        );
+      }
+      
+      let message = `📋 Список всех складов (${warehouses.length}):\n\n`;
+      
+      warehouses.forEach((w, index) => {
+        const whatsappStatus = w.whatsapp_group_id ? 
+          `✅ WhatsApp: ${w.whatsapp_group_id}` : 
+          '❌ WhatsApp не настроен';
+        
+        message += `${index + 1}. ${w.name}\n`;
+        message += `   🆔 ID: ${w.id}\n`;
+        message += `   📱 ${whatsappStatus}\n`;
+        message += `   📅 Создан: ${new Date(w.created_at).toLocaleDateString('ru-RU')}\n\n`;
+      });
+      
+      message += '💡 Команды управления:\n';
+      message += '➕ Добавить: /addwarehouse2 Название\n';
+      message += '📱 Настроить WhatsApp: /setwhatsapp Название | ID_группы\n';
+      message += '🗑️ Удалить: /removewarehouse ID';
+      
+      // Разбиваем длинное сообщение на части если нужно
+      if (message.length > 4000) {
+        const parts = [];
+        let currentPart = '';
+        const lines = message.split('\n');
+        
+        for (const line of lines) {
+          if (currentPart.length + line.length > 3800) {
+            parts.push(currentPart);
+            currentPart = line + '\n';
+          } else {
+            currentPart += line + '\n';
+          }
+        }
+        
+        if (currentPart.trim()) {
+          parts.push(currentPart);
+        }
+        
+        for (const part of parts) {
+          await ctx.reply(part);
+        }
+      } else {
+        ctx.reply(message);
+      }
+      
+    } catch (error) {
+      console.error('❌ Ошибка получения списка складов:', error);
+      ctx.reply(`❌ Ошибка при получении списка складов:\n\n${error.message}`);
+    }
   });
   
   // 🔧 Улучшенная команда добавления склада с проверкой дубликатов

@@ -391,20 +391,45 @@ class Database {
   approveClient(telegramId, name, phone, approvedBy) {
     return new Promise((resolve, reject) => {
       this.db.serialize(() => {
-        this.db.run(
-          'INSERT OR IGNORE INTO clients (telegram_id, name, phone, added_by) VALUES (?, ?, ?, ?)',
-          [telegramId, name, phone, approvedBy],
-          (err) => {
+        // Сначала проверяем, существует ли уже клиент
+        this.db.get(
+          'SELECT * FROM clients WHERE telegram_id = ?',
+          [telegramId],
+          (err, existingClient) => {
             if (err) return reject(err);
             
-            this.db.run(
-              'UPDATE registration_requests SET status = "approved" WHERE telegram_id = ?',
-              [telegramId],
-              (err) => {
-                if (err) return reject(err);
-                resolve(true);
-              }
-            );
+            if (existingClient) {
+              // Клиент уже существует - обновляем статус запроса и возвращаем false
+              console.log(`⚠️ Клиент ${telegramId} уже существует в базе`);
+              this.db.run(
+                'UPDATE registration_requests SET status = "approved" WHERE telegram_id = ?',
+                [telegramId],
+                (err) => {
+                  if (err) return reject(err);
+                  resolve(false); // Возвращаем false, так как клиент не был добавлен
+                }
+              );
+            } else {
+              // Клиент не существует - добавляем его
+              this.db.run(
+                'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES (?, ?, ?, ?)',
+                [telegramId, name, phone, approvedBy],
+                (err) => {
+                  if (err) return reject(err);
+                  
+                  console.log(`✅ Клиент ${telegramId} (${name}) добавлен в базу`);
+                  
+                  this.db.run(
+                    'UPDATE registration_requests SET status = "approved" WHERE telegram_id = ?',
+                    [telegramId],
+                    (err) => {
+                      if (err) return reject(err);
+                      resolve(true); // Возвращаем true, так как клиент был успешно добавлен
+                    }
+                  );
+                }
+              );
+            }
           }
         );
       });
