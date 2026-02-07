@@ -1,14 +1,37 @@
 const sqlite3 = require('sqlite3').verbose();
+const fs = require('fs');
+const path = require('path');
 
 const dbPath = process.env.DB_PATH || './orders.db';
+
+// 🔧 Создаем директорию для базы данных, если её нет (для Railway Volume)
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  try {
+    fs.mkdirSync(dbDir, { recursive: true });
+    console.log(`📁 Создана директория для БД: ${dbDir}`);
+  } catch (error) {
+    console.error(`❌ Ошибка создания директории ${dbDir}:`, error);
+  }
+}
+
+console.log(`📊 Путь к базе данных: ${dbPath}`);
 
 class Database {
   constructor() {
     this.db = new sqlite3.Database(dbPath, (err) => {
       if (err) {
-        console.error('Ошибка подключения к БД:', err);
+        console.error('❌ Ошибка подключения к БД:', err);
       } else {
         console.log('✅ База данных подключена');
+        
+        // Проверяем размер файла БД
+        if (fs.existsSync(dbPath)) {
+          const stats = fs.statSync(dbPath);
+          console.log(`📊 Размер БД: ${(stats.size / 1024).toFixed(2)} KB`);
+          console.log(`📅 Последнее изменение: ${stats.mtime.toLocaleString('ru-RU')}`);
+        }
+        
         this.init();
       }
     });
@@ -480,12 +503,35 @@ class Database {
   // Управление складами
   addWarehouse(name, whatsappGroupId = null) {
     return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT INTO warehouses (name, whatsapp_group_id) VALUES (?, ?)',
-        [name, whatsappGroupId],
-        function(err) {
+      // Сначала проверяем, существует ли уже такой склад
+      this.db.get(
+        'SELECT * FROM warehouses WHERE name = ? AND is_active = 1',
+        [name],
+        (err, existingWarehouse) => {
           if (err) return reject(err);
-          resolve(this.lastID);
+          
+          if (existingWarehouse) {
+            // Склад уже существует
+            console.log(`⚠️ Склад "${name}" уже существует (ID: ${existingWarehouse.id})`);
+            const error = new Error(`Склад "${name}" уже существует`);
+            error.code = 'WAREHOUSE_EXISTS';
+            error.existingId = existingWarehouse.id;
+            return reject(error);
+          }
+          
+          // Склад не существует - добавляем
+          this.db.run(
+            'INSERT INTO warehouses (name, whatsapp_group_id) VALUES (?, ?)',
+            [name, whatsappGroupId],
+            function(err) {
+              if (err) {
+                console.error(`❌ Ошибка добавления склада "${name}":`, err);
+                return reject(err);
+              }
+              console.log(`✅ Склад "${name}" добавлен (ID: ${this.lastID})`);
+              resolve(this.lastID);
+            }
+          );
         }
       );
     });
@@ -548,12 +594,35 @@ class Database {
   // Управление товарами
   addProduct(name) {
     return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT INTO products (name) VALUES (?)',
+      // Сначала проверяем, существует ли уже такой товар
+      this.db.get(
+        'SELECT * FROM products WHERE name = ? AND is_active = 1',
         [name],
-        function(err) {
+        (err, existingProduct) => {
           if (err) return reject(err);
-          resolve(this.lastID);
+          
+          if (existingProduct) {
+            // Товар уже существует
+            console.log(`⚠️ Товар "${name}" уже существует (ID: ${existingProduct.id})`);
+            const error = new Error(`Товар "${name}" уже существует`);
+            error.code = 'PRODUCT_EXISTS';
+            error.existingId = existingProduct.id;
+            return reject(error);
+          }
+          
+          // Товар не существует - добавляем
+          this.db.run(
+            'INSERT INTO products (name) VALUES (?)',
+            [name],
+            function(err) {
+              if (err) {
+                console.error(`❌ Ошибка добавления товара "${name}":`, err);
+                return reject(err);
+              }
+              console.log(`✅ Товар "${name}" добавлен (ID: ${this.lastID})`);
+              resolve(this.lastID);
+            }
+          );
         }
       );
     });

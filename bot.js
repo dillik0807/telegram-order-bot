@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
-const database = require('./database');
+const database = require('./database-wrapper');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 const dataManager = require('./data-manager');
@@ -169,11 +169,17 @@ bot.command('start', async (ctx) => {
   const userId = ctx.from.id;
   const userName = ctx.from.first_name || ctx.from.username || 'Пользователь';
   
+  console.log(`\n🔍 Команда /start от пользователя ${userId} (${userName})`);
+  
   // Проверка прав доступа
   const isAdminUser = admin.isAdmin(userId);
   const isClientUser = await database.isClient(userId);
   
+  console.log(`   isAdmin: ${isAdminUser}`);
+  console.log(`   isClient: ${isClientUser}`);
+  
   if (isAdminUser) {
+    console.log(`   ✅ Показываем админ-меню`);
     const keyboard = [
       [{ text: '📦 Создать заявку' }],
       [{ text: '👨‍💼 Панель администратора' }]
@@ -187,6 +193,7 @@ bot.command('start', async (ctx) => {
   }
   
   if (isClientUser) {
+    console.log(`   ✅ Показываем клиентское меню`);
     // Показываем постоянное меню
     const keyboard = [
       [{ text: '🏬 Склад' }]
@@ -199,15 +206,20 @@ bot.command('start', async (ctx) => {
     );
   }
   
+  console.log(`   ⚠️ Пользователь не зарегистрирован`);
+  
   // Пользователь не зарегистрирован - отправляем запрос администратору
   const pendingRequest = await database.getPendingRequest(userId);
   
   if (pendingRequest) {
+    console.log(`   ⏳ У пользователя уже есть ожидающий запрос`);
     return ctx.reply(
       '⏳ Ваш запрос на регистрацию уже отправлен администратору.\n\n' +
       'Пожалуйста, ожидайте подтверждения.'
     );
   }
+  
+  console.log(`   📝 Создаем новый запрос на регистрацию`);
   
   // Создаем запрос на регистрацию
   await database.createRegistrationRequest(userId, userName, ctx.from.username);
