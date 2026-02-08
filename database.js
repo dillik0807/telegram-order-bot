@@ -1,75 +1,79 @@
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 
-const dbPath = process.env.DB_PATH || './orders.db';
+// Подключение к PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
 class Database {
   constructor() {
-    this.db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        console.error('Ошибка подключения к БД:', err);
-      } else {
-        console.log('✅ База данных подключена');
-        this.init();
-      }
-    });
+    this.pool = pool;
+    console.log('✅ PostgreSQL подключен');
+    this.init();
   }
 
-  init() {
-    this.db.serialize(() => {
+  async init() {
+    try {
       // Таблица пользователей
-      this.db.run(`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          telegram_id INTEGER UNIQUE NOT NULL,
+          id SERIAL PRIMARY KEY,
+          telegram_id BIGINT UNIQUE NOT NULL,
           name TEXT,
           phone TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
 
       // Таблица запросов на регистрацию
-      this.db.run(`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS registration_requests (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          telegram_id INTEGER UNIQUE NOT NULL,
+          id SERIAL PRIMARY KEY,
+          telegram_id BIGINT UNIQUE NOT NULL,
           name TEXT NOT NULL,
           username TEXT,
           status TEXT DEFAULT 'pending',
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
 
-      // Таблица клиентов (разрешенные пользователи)
-      this.db.run(`
+      // Таблица клиентов
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS clients (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          telegram_id INTEGER UNIQUE NOT NULL,
+          id SERIAL PRIMARY KEY,
+          telegram_id BIGINT UNIQUE NOT NULL,
           name TEXT NOT NULL,
           phone TEXT,
-          added_by INTEGER NOT NULL,
+          added_by BIGINT NOT NULL,
           is_active INTEGER DEFAULT 1,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
 
       // Таблица заявок
-      this.db.run(`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS orders (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id SERIAL PRIMARY KEY,
           user_id INTEGER NOT NULL,
           warehouse TEXT,
           transport_number TEXT,
           comment TEXT,
           status TEXT DEFAULT 'new',
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          is_deleted INTEGER DEFAULT 0,
+          deleted_at TIMESTAMP,
+          deleted_by TEXT,
+          restored_at TIMESTAMP,
+          restored_by TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (user_id) REFERENCES users(id)
         )
       `);
 
       // Таблица товаров в заявке
-      this.db.run(`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS order_items (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id SERIAL PRIMARY KEY,
           order_id INTEGER NOT NULL,
           product_name TEXT NOT NULL,
           quantity TEXT NOT NULL,
@@ -78,218 +82,198 @@ class Database {
       `);
 
       // Таблица складов
-      this.db.run(`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS warehouses (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id SERIAL PRIMARY KEY,
           name TEXT NOT NULL UNIQUE,
           whatsapp_group_id TEXT,
           is_active INTEGER DEFAULT 1,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
 
       // Таблица товаров
-      this.db.run(`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS products (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id SERIAL PRIMARY KEY,
           name TEXT NOT NULL UNIQUE,
           is_active INTEGER DEFAULT 1,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
-    });
+
+      console.log('✅ Таблицы PostgreSQL инициализированы');
+    } catch (error) {
+      console.error('❌ Ошибка инициализации таблиц:', error);
+    }
   }
 
-  getOrCreateUser(telegramId, name, phone) {
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        'SELECT * FROM users WHERE telegram_id = ?',
-        [telegramId],
-        (err, row) => {
-          if (err) return reject(err);
-          
-          if (row) {
-            resolve(row);
-          } else {
-            this.db.run(
-              'INSERT INTO users (telegram_id, name, phone) VALUES (?, ?, ?)',
-              [telegramId, name, phone],
-              function(err) {
-                if (err) return reject(err);
-                resolve({ id: this.lastID, telegram_id: telegramId, name, phone });
-              }
-            );
-          }
-        }
+  async getOrCreateUser(telegramId, name, phone) {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM users WHERE telegram_id = $1',
+        [telegramId]
       );
-    });
-  }
-
-  createOrder(userId, warehouse, transportNumber, comment) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT INTO orders (user_id, warehouse, transport_number, comment) VALUES (?, ?, ?, ?)',
-        [userId, warehouse, transportNumber, comment],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
-      );
-    });
-  }
-
-  addOrderItem(orderId, productName, quantity) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT INTO order_items (order_id, product_name, quantity) VALUES (?, ?, ?)',
-        [orderId, productName, quantity],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
-      );
-    });
-  }
-
-  getOrderWithItems(orderId) {
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        'SELECT * FROM orders WHERE id = ?',
-        [orderId],
-        (err, order) => {
-          if (err) return reject(err);
-          
-          this.db.all(
-            'SELECT * FROM order_items WHERE order_id = ?',
-            [orderId],
-            (err, items) => {
-              if (err) return reject(err);
-              resolve({ ...order, items });
-            }
-          );
-        }
-      );
-    });
-  }
-
-  addClient(telegramId, name, phone, addedBy) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES (?, ?, ?, ?)',
-        [telegramId, name || '', phone || '', addedBy],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
-      );
-    });
-  }
-
-  isClient(telegramId) {
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        'SELECT * FROM clients WHERE telegram_id = ? AND is_active = 1',
-        [telegramId],
-        (err, row) => {
-          if (err) return reject(err);
-          resolve(!!row);
-        }
-      );
-    });
-  }
-
-  getAllClients() {
-    return new Promise((resolve, reject) => {
-      this.db.all(
-        'SELECT * FROM clients WHERE is_active = 1 ORDER BY created_at DESC',
-        [],
-        (err, rows) => {
-          if (err) return reject(err);
-          resolve(rows || []);
-        }
-      );
-    });
-  }
-
-  removeClient(telegramId) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'UPDATE clients SET is_active = 0 WHERE telegram_id = ?',
-        [telegramId],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.changes > 0);
-        }
-      );
-    });
-  }
-
-  getStats() {
-    return new Promise((resolve, reject) => {
-      const stats = {};
       
-      this.db.get('SELECT COUNT(*) as count FROM clients WHERE is_active = 1', [], (err, row) => {
-        if (err) return reject(err);
-        stats.totalClients = row.count;
-        
-        this.db.get('SELECT COUNT(*) as count FROM orders', [], (err, row) => {
-          if (err) return reject(err);
-          stats.totalOrders = row.count;
-          
-          this.db.get(
-            'SELECT COUNT(*) as count FROM orders WHERE DATE(created_at) = DATE("now")',
-            [],
-            (err, row) => {
-              if (err) return reject(err);
-              stats.ordersToday = row.count;
-              
-              this.db.get(
-                'SELECT COUNT(*) as count FROM orders WHERE created_at >= DATE("now", "-7 days")',
-                [],
-                (err, row) => {
-                  if (err) return reject(err);
-                  stats.ordersWeek = row.count;
-                  resolve(stats);
-                }
-              );
-            }
-          );
-        });
-      });
-    });
+      if (result.rows.length > 0) {
+        return result.rows[0];
+      } else {
+        const insertResult = await this.pool.query(
+          'INSERT INTO users (telegram_id, name, phone) VALUES ($1, $2, $3) RETURNING *',
+          [telegramId, name, phone]
+        );
+        return insertResult.rows[0];
+      }
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Получить детальную статистику заявок по пользователям
-  getDetailedOrderStats() {
-    return new Promise((resolve, reject) => {
-      const query = `
+  async createOrder(userId, warehouse, transportNumber, comment) {
+    try {
+      const result = await this.pool.query(
+        'INSERT INTO orders (user_id, warehouse, transport_number, comment) VALUES ($1, $2, $3, $4) RETURNING id',
+        [userId, warehouse, transportNumber, comment]
+      );
+      return result.rows[0].id;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async addOrderItem(orderId, productName, quantity) {
+    try {
+      const result = await this.pool.query(
+        'INSERT INTO order_items (order_id, product_name, quantity) VALUES ($1, $2, $3) RETURNING id',
+        [orderId, productName, quantity]
+      );
+      return result.rows[0].id;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getOrderWithItems(orderId) {
+    try {
+      const orderResult = await this.pool.query(
+        'SELECT * FROM orders WHERE id = $1',
+        [orderId]
+      );
+      
+      const itemsResult = await this.pool.query(
+        'SELECT * FROM order_items WHERE order_id = $1',
+        [orderId]
+      );
+      
+      return { ...orderResult.rows[0], items: itemsResult.rows };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async addClient(telegramId, name, phone, addedBy) {
+    try {
+      const result = await this.pool.query(
+        'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES ($1, $2, $3, $4) RETURNING id',
+        [telegramId, name || '', phone || '', addedBy]
+      );
+      return result.rows[0].id;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async isClient(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM clients WHERE telegram_id = $1 AND is_active = 1',
+        [telegramId]
+      );
+      return result.rows.length > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getAllClients() {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM clients WHERE is_active = 1 ORDER BY created_at DESC'
+      );
+      return result.rows;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async removeClient(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE clients SET is_active = 0 WHERE telegram_id = $1',
+        [telegramId]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getStats() {
+    try {
+      const clientsResult = await this.pool.query(
+        'SELECT COUNT(*) as count FROM clients WHERE is_active = 1'
+      );
+      
+      const ordersResult = await this.pool.query(
+        'SELECT COUNT(*) as count FROM orders WHERE is_deleted = 0 OR is_deleted IS NULL'
+      );
+      
+      const todayResult = await this.pool.query(
+        'SELECT COUNT(*) as count FROM orders WHERE DATE(created_at) = CURRENT_DATE AND (is_deleted = 0 OR is_deleted IS NULL)'
+      );
+      
+      const weekResult = await this.pool.query(
+        'SELECT COUNT(*) as count FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL \'7 days\' AND (is_deleted = 0 OR is_deleted IS NULL)'
+      );
+      
+      return {
+        totalClients: parseInt(clientsResult.rows[0].count),
+        totalOrders: parseInt(ordersResult.rows[0].count),
+        ordersToday: parseInt(todayResult.rows[0].count),
+        ordersWeek: parseInt(weekResult.rows[0].count)
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getDetailedOrderStats() {
+    try {
+      const result = await this.pool.query(`
         SELECT 
+          c.id as client_id,
           c.name as client_name,
-          c.telegram_id,
           c.phone,
+          c.telegram_id,
           COUNT(o.id) as orders_count,
           MAX(o.created_at) as last_order_date,
           MIN(o.created_at) as first_order_date
         FROM clients c
-        LEFT JOIN orders o ON c.telegram_id = (
-          SELECT u.telegram_id FROM users u WHERE u.id = o.user_id
-        )
+        LEFT JOIN orders o ON c.id = o.client_id 
+          AND (o.is_deleted = 0 OR o.is_deleted IS NULL)
         WHERE c.is_active = 1
-        GROUP BY c.telegram_id, c.name, c.phone
+        GROUP BY c.id, c.name, c.phone, c.telegram_id
         ORDER BY orders_count DESC, last_order_date DESC
-      `;
-      
-      this.db.all(query, [], (err, rows) => {
-        if (err) return reject(err);
-        resolve(rows || []);
-      });
-    });
+      `);
+      return result.rows;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Получить последние заявки с информацией о клиентах
-  getRecentOrdersWithClients(limit = 10) {
-    return new Promise((resolve, reject) => {
-      const query = `
+  async getRecentOrdersWithClients(limit = 10) {
+    try {
+      const result = await this.pool.query(`
         SELECT 
           o.id,
           o.warehouse,
@@ -303,265 +287,278 @@ class Database {
         FROM orders o
         JOIN users u ON o.user_id = u.id
         JOIN clients c ON u.telegram_id = c.telegram_id
-        WHERE c.is_active = 1
+        WHERE c.is_active = 1 AND (o.is_deleted = 0 OR o.is_deleted IS NULL)
         ORDER BY o.created_at DESC
-        LIMIT ?
-      `;
-      
-      this.db.all(query, [limit], (err, rows) => {
-        if (err) return reject(err);
-        resolve(rows || []);
-      });
-    });
+        LIMIT $1
+      `, [limit]);
+      return result.rows;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Получить статистику по складам
-  getWarehouseStats() {
-    return new Promise((resolve, reject) => {
-      const query = `
+  async getWarehouseStats() {
+    try {
+      const result = await this.pool.query(`
         SELECT 
-          o.warehouse,
+          warehouse,
           COUNT(*) as orders_count,
-          COUNT(DISTINCT u.telegram_id) as unique_clients
-        FROM orders o
-        JOIN users u ON o.user_id = u.id
-        GROUP BY o.warehouse
+          MAX(created_at) as last_order_date
+        FROM orders 
+        WHERE (is_deleted = 0 OR is_deleted IS NULL)
+        GROUP BY warehouse
         ORDER BY orders_count DESC
-      `;
+      `);
+      return result.rows;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async createRegistrationRequest(telegramId, name, username) {
+    try {
+      const result = await this.pool.query(
+        'INSERT INTO registration_requests (telegram_id, name, username) VALUES ($1, $2, $3) ON CONFLICT (telegram_id) DO UPDATE SET name = $2, username = $3 RETURNING id',
+        [telegramId, name, username || '']
+      );
+      return result.rows[0].id;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getRegistrationRequest(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM registration_requests WHERE telegram_id = $1 AND status = $2',
+        [telegramId, 'pending']
+      );
+      return result.rows[0];
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getPendingRequests() {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM registration_requests WHERE status = $1 ORDER BY created_at DESC',
+        ['pending']
+      );
+      return result.rows;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getPendingRequest(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM registration_requests WHERE telegram_id = $1 AND status = $2',
+        [telegramId, 'pending']
+      );
+      return result.rows[0];
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async approveClient(telegramId, name, phone, approvedBy) {
+    try {
+      await this.pool.query(
+        'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES ($1, $2, $3, $4) ON CONFLICT (telegram_id) DO NOTHING',
+        [telegramId, name, phone, approvedBy]
+      );
       
-      this.db.all(query, [], (err, rows) => {
-        if (err) return reject(err);
-        resolve(rows || []);
-      });
-    });
-  }
-
-  createRegistrationRequest(telegramId, name, username) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT OR REPLACE INTO registration_requests (telegram_id, name, username) VALUES (?, ?, ?)',
-        [telegramId, name, username || ''],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
+      await this.pool.query(
+        'UPDATE registration_requests SET status = $1 WHERE telegram_id = $2',
+        ['approved', telegramId]
       );
-    });
+      
+      return true;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  getRegistrationRequest(telegramId) {
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        'SELECT * FROM registration_requests WHERE telegram_id = ? AND status = "pending"',
-        [telegramId],
-        (err, row) => {
-          if (err) return reject(err);
-          resolve(row);
-        }
+  async rejectRequest(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE registration_requests SET status = $1 WHERE telegram_id = $2',
+        ['rejected', telegramId]
       );
-    });
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  getPendingRequests() {
-    return new Promise((resolve, reject) => {
-      this.db.all(
-        'SELECT * FROM registration_requests WHERE status = "pending" ORDER BY created_at DESC',
-        [],
-        (err, rows) => {
-          if (err) return reject(err);
-          resolve(rows || []);
-        }
+  async getClient(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM clients WHERE telegram_id = $1 AND is_active = 1',
+        [telegramId]
       );
-    });
+      return result.rows[0];
+    } catch (error) {
+      throw error;
+    }
   }
 
-  getPendingRequest(telegramId) {
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        'SELECT * FROM registration_requests WHERE telegram_id = ? AND status = "pending"',
-        [telegramId],
-        (err, row) => {
-          if (err) return reject(err);
-          resolve(row);
-        }
+  async updateClient(telegramId, name, phone) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE clients SET name = $1, phone = $2 WHERE telegram_id = $3',
+        [name, phone, telegramId]
       );
-    });
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  approveClient(telegramId, name, phone, approvedBy) {
-    return new Promise((resolve, reject) => {
-      this.db.serialize(() => {
-        this.db.run(
-          'INSERT OR IGNORE INTO clients (telegram_id, name, phone, added_by) VALUES (?, ?, ?, ?)',
-          [telegramId, name, phone, approvedBy],
-          (err) => {
-            if (err) return reject(err);
-            
-            this.db.run(
-              'UPDATE registration_requests SET status = "approved" WHERE telegram_id = ?',
-              [telegramId],
-              (err) => {
-                if (err) return reject(err);
-                resolve(true);
-              }
-            );
-          }
-        );
-      });
-    });
-  }
-
-  rejectRequest(telegramId) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'UPDATE registration_requests SET status = "rejected" WHERE telegram_id = ?',
-        [telegramId],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.changes > 0);
-        }
+  async addWarehouse(name, whatsappGroupId = null) {
+    try {
+      const result = await this.pool.query(
+        'INSERT INTO warehouses (name, whatsapp_group_id) VALUES ($1, $2) RETURNING id',
+        [name, whatsappGroupId]
       );
-    });
+      return result.rows[0].id;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Получить данные клиента
-  getClient(telegramId) {
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        'SELECT * FROM clients WHERE telegram_id = ? AND is_active = 1',
-        [telegramId],
-        (err, row) => {
-          if (err) return reject(err);
-          resolve(row);
-        }
+  async updateWarehouseWhatsApp(warehouseName, whatsappGroupId) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE warehouses SET whatsapp_group_id = $1 WHERE name = $2 AND is_active = 1',
+        [whatsappGroupId, warehouseName]
       );
-    });
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Обновить данные клиента
-  updateClient(telegramId, name, phone) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'UPDATE clients SET name = ?, phone = ? WHERE telegram_id = ?',
-        [name, phone, telegramId],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.changes > 0);
-        }
+  async getWarehouseWhatsApp(warehouseName) {
+    try {
+      const result = await this.pool.query(
+        'SELECT whatsapp_group_id FROM warehouses WHERE name = $1 AND is_active = 1',
+        [warehouseName]
       );
-    });
+      return result.rows[0] ? result.rows[0].whatsapp_group_id : null;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Управление складами
-  addWarehouse(name, whatsappGroupId = null) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT INTO warehouses (name, whatsapp_group_id) VALUES (?, ?)',
-        [name, whatsappGroupId],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
+  async getAllWarehouses() {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name'
       );
-    });
+      return result.rows;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Обновить WhatsApp группу склада
-  updateWarehouseWhatsApp(warehouseName, whatsappGroupId) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'UPDATE warehouses SET whatsapp_group_id = ? WHERE name = ? AND is_active = 1',
-        [whatsappGroupId, warehouseName],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.changes > 0);
-        }
+  async removeWarehouse(id) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE warehouses SET is_active = 0 WHERE id = $1',
+        [id]
       );
-    });
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Получить WhatsApp группу склада
-  getWarehouseWhatsApp(warehouseName) {
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        'SELECT whatsapp_group_id FROM warehouses WHERE name = ? AND is_active = 1',
-        [warehouseName],
-        (err, row) => {
-          if (err) return reject(err);
-          resolve(row ? row.whatsapp_group_id : null);
-        }
+  async addProduct(name) {
+    try {
+      const result = await this.pool.query(
+        'INSERT INTO products (name) VALUES ($1) RETURNING id',
+        [name]
       );
-    });
+      return result.rows[0].id;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  getAllWarehouses() {
-    return new Promise((resolve, reject) => {
-      this.db.all(
-        'SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name',
-        [],
-        (err, rows) => {
-          if (err) return reject(err);
-          resolve(rows || []);
-        }
+  async getAllProducts() {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM products WHERE is_active = 1 ORDER BY name'
       );
-    });
+      return result.rows;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  removeWarehouse(id) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'UPDATE warehouses SET is_active = 0 WHERE id = ?',
-        [id],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.changes > 0);
-        }
+  async removeProduct(id) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE products SET is_active = 0 WHERE id = $1',
+        [id]
       );
-    });
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
   }
 
-  // Управление товарами
-  addProduct(name) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'INSERT INTO products (name) VALUES (?)',
-        [name],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
+  // Методы мягкого удаления
+  async softDeleteOrder(orderId, deletedBy = 'admin') {
+    try {
+      const result = await this.pool.query(
+        'UPDATE orders SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP, deleted_by = $1 WHERE id = $2',
+        [deletedBy, orderId]
       );
-    });
+      console.log(`✅ Заявка ${orderId} помечена как удаленная`);
+      return result.rowCount > 0;
+    } catch (error) {
+      console.error('❌ Ошибка мягкого удаления заявки:', error);
+      throw error;
+    }
   }
 
-  getAllProducts() {
-    return new Promise((resolve, reject) => {
-      this.db.all(
-        'SELECT * FROM products WHERE is_active = 1 ORDER BY name',
-        [],
-        (err, rows) => {
-          if (err) return reject(err);
-          resolve(rows || []);
-        }
+  async restoreOrder(orderId, restoredBy = 'admin') {
+    try {
+      const result = await this.pool.query(
+        'UPDATE orders SET is_deleted = 0, deleted_at = NULL, deleted_by = NULL, restored_at = CURRENT_TIMESTAMP, restored_by = $1 WHERE id = $2',
+        [restoredBy, orderId]
       );
-    });
+      console.log(`✅ Заявка ${orderId} восстановлена из корзины`);
+      return result.rowCount > 0;
+    } catch (error) {
+      console.error('❌ Ошибка восстановления заявки:', error);
+      throw error;
+    }
   }
 
-  removeProduct(id) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'UPDATE products SET is_active = 0 WHERE id = ?',
-        [id],
-        function(err) {
-          if (err) return reject(err);
-          resolve(this.changes > 0);
-        }
-      );
-    });
+  async getDeletedOrders() {
+    try {
+      const result = await this.pool.query(`
+        SELECT o.*, c.name as client_name, c.phone 
+        FROM orders o
+        LEFT JOIN clients c ON o.client_id = c.id
+        WHERE o.is_deleted = 1
+        ORDER BY o.deleted_at DESC
+      `);
+      console.log(`📊 Найдено удаленных заявок: ${result.rows.length}`);
+      return result.rows;
+    } catch (error) {
+      console.error('❌ Ошибка получения удаленных заявок:', error);
+      throw error;
+    }
   }
 
-  close() {
-    this.db.close();
+  async close() {
+    await this.pool.end();
   }
 }
 
