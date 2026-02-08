@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node bot.js",
     "dev": "nodemon bot.js",
-    "migrate": "node railway-migration.js"
+    "migrate": "node railway-migration.js",
+    "check-db": "node check-database.js",
+    "use-postgres": "node switch-to-postgres.js",
+    "use-sqlite": "node switch-to-sqlite.js",
+    "test-postgres": "node test-postgres-connection.js"
   },
   "keywords": [
     "telegram",

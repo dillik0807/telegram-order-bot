@@ -5,9 +5,17 @@ const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 const dataManager = require('./data-manager');
 
-// 🔧 Загружаем исправления для Order Bot
-const orderBotFixes = require('./fix-order-bot-soft-delete');
-console.log('🔧 Исправления Order Bot загружены');
+// 🔧 Загружаем исправления для Order Bot (только если используется SQLite)
+try {
+  if (process.env.DB_PATH && !process.env.DATABASE_URL) {
+    const orderBotFixes = require('./fix-order-bot-soft-delete');
+    console.log('🔧 Исправления Order Bot загружены (SQLite)');
+  } else {
+    console.log('🔧 Используется PostgreSQL - исправления встроены');
+  }
+} catch (error) {
+  console.log('⚠️ Исправления Order Bot не загружены:', error.message);
+}
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 

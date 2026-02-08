@@ -1,33 +1,21 @@
-/**
- * PostgreSQL адаптер для базы данных
- * Совместим с существующим SQLite интерфейсом
- */
-
 const { Pool } = require('pg');
 
-class DatabasePostgres {
+// Подключение к PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+class Database {
   constructor() {
-    const connectionString = process.env.DATABASE_URL;
-    
-    if (!connectionString) {
-      throw new Error('DATABASE_URL не установлен в переменных окружения');
-    }
-    
-    // Создаем пул подключений
-    this.pool = new Pool({
-      connectionString: connectionString,
-      ssl: process.env.NODE_ENV === 'production' ? {
-        rejectUnauthorized: false
-      } : false
-    });
-    
+    this.pool = pool;
     console.log('✅ PostgreSQL подключен');
     this.init();
   }
 
   async init() {
     try {
-      // Создаем таблицы, если их нет
+      // Таблица пользователей
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
@@ -38,6 +26,7 @@ class DatabasePostgres {
         )
       `);
 
+      // Таблица запросов на регистрацию
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS registration_requests (
           id SERIAL PRIMARY KEY,
@@ -49,6 +38,7 @@ class DatabasePostgres {
         )
       `);
 
+      // Таблица клиентов
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS clients (
           id SERIAL PRIMARY KEY,
@@ -61,6 +51,7 @@ class DatabasePostgres {
         )
       `);
 
+      // Таблица заявок
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS orders (
           id SERIAL PRIMARY KEY,
@@ -69,11 +60,17 @@ class DatabasePostgres {
           transport_number TEXT,
           comment TEXT,
           status TEXT DEFAULT 'new',
+          is_deleted INTEGER DEFAULT 0,
+          deleted_at TIMESTAMP,
+          deleted_by TEXT,
+          restored_at TIMESTAMP,
+          restored_by TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (user_id) REFERENCES users(id)
         )
       `);
 
+      // Таблица товаров в заявке
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS order_items (
           id SERIAL PRIMARY KEY,
@@ -84,6 +81,7 @@ class DatabasePostgres {
         )
       `);
 
+      // Таблица складов
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS warehouses (
           id SERIAL PRIMARY KEY,
@@ -94,6 +92,7 @@ class DatabasePostgres {
         )
       `);
 
+      // Таблица товаров
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS products (
           id SERIAL PRIMARY KEY,
@@ -106,7 +105,6 @@ class DatabasePostgres {
       console.log('✅ Таблицы PostgreSQL инициализированы');
     } catch (error) {
       console.error('❌ Ошибка инициализации таблиц:', error);
-      throw error;
     }
   }
 
@@ -119,14 +117,13 @@ class DatabasePostgres {
       
       if (result.rows.length > 0) {
         return result.rows[0];
+      } else {
+        const insertResult = await this.pool.query(
+          'INSERT INTO users (telegram_id, name, phone) VALUES ($1, $2, $3) RETURNING *',
+          [telegramId, name, phone]
+        );
+        return insertResult.rows[0];
       }
-      
-      const insertResult = await this.pool.query(
-        'INSERT INTO users (telegram_id, name, phone) VALUES ($1, $2, $3) RETURNING *',
-        [telegramId, name, phone]
-      );
-      
-      return insertResult.rows[0];
     } catch (error) {
       throw error;
     }
@@ -138,7 +135,6 @@ class DatabasePostgres {
         'INSERT INTO orders (user_id, warehouse, transport_number, comment) VALUES ($1, $2, $3, $4) RETURNING id',
         [userId, warehouse, transportNumber, comment]
       );
-      
       return result.rows[0].id;
     } catch (error) {
       throw error;
@@ -151,7 +147,6 @@ class DatabasePostgres {
         'INSERT INTO order_items (order_id, product_name, quantity) VALUES ($1, $2, $3) RETURNING id',
         [orderId, productName, quantity]
       );
-      
       return result.rows[0].id;
     } catch (error) {
       throw error;
@@ -165,19 +160,12 @@ class DatabasePostgres {
         [orderId]
       );
       
-      if (orderResult.rows.length === 0) {
-        return null;
-      }
-      
       const itemsResult = await this.pool.query(
         'SELECT * FROM order_items WHERE order_id = $1',
         [orderId]
       );
       
-      return {
-        ...orderResult.rows[0],
-        items: itemsResult.rows
-      };
+      return { ...orderResult.rows[0], items: itemsResult.rows };
     } catch (error) {
       throw error;
     }
@@ -185,32 +173,12 @@ class DatabasePostgres {
 
   async addClient(telegramId, name, phone, addedBy) {
     try {
-      // Проверяем, существует ли уже клиент
-      const existingResult = await this.pool.query(
-        'SELECT * FROM clients WHERE telegram_id = $1',
-        [telegramId]
-      );
-      
-      if (existingResult.rows.length > 0) {
-        console.log(`⚠️ Клиент ${telegramId} уже существует в базе`);
-        // Обновляем данные существующего клиента
-        await this.pool.query(
-          'UPDATE clients SET name = $1, phone = $2, is_active = 1 WHERE telegram_id = $3',
-          [name || '', phone || '', telegramId]
-        );
-        console.log(`✅ Данные клиента ${telegramId} обновлены`);
-        return existingResult.rows[0].id;
-      }
-      
       const result = await this.pool.query(
         'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES ($1, $2, $3, $4) RETURNING id',
         [telegramId, name || '', phone || '', addedBy]
       );
-      
-      console.log(`✅ Клиент ${telegramId} добавлен в базу`);
       return result.rows[0].id;
     } catch (error) {
-      console.error(`❌ Ошибка добавления клиента ${telegramId}:`, error.message);
       throw error;
     }
   }
@@ -221,7 +189,6 @@ class DatabasePostgres {
         'SELECT * FROM clients WHERE telegram_id = $1 AND is_active = 1',
         [telegramId]
       );
-      
       return result.rows.length > 0;
     } catch (error) {
       throw error;
@@ -233,7 +200,6 @@ class DatabasePostgres {
       const result = await this.pool.query(
         'SELECT * FROM clients WHERE is_active = 1 ORDER BY created_at DESC'
       );
-      
       return result.rows;
     } catch (error) {
       throw error;
@@ -246,7 +212,6 @@ class DatabasePostgres {
         'UPDATE clients SET is_active = 0 WHERE telegram_id = $1',
         [telegramId]
       );
-      
       return result.rowCount > 0;
     } catch (error) {
       throw error;
@@ -260,15 +225,15 @@ class DatabasePostgres {
       );
       
       const ordersResult = await this.pool.query(
-        'SELECT COUNT(*) as count FROM orders'
+        'SELECT COUNT(*) as count FROM orders WHERE is_deleted = 0 OR is_deleted IS NULL'
       );
       
       const todayResult = await this.pool.query(
-        'SELECT COUNT(*) as count FROM orders WHERE DATE(created_at) = CURRENT_DATE'
+        'SELECT COUNT(*) as count FROM orders WHERE DATE(created_at) = CURRENT_DATE AND (is_deleted = 0 OR is_deleted IS NULL)'
       );
       
       const weekResult = await this.pool.query(
-        'SELECT COUNT(*) as count FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL \'7 days\''
+        'SELECT COUNT(*) as count FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL \'7 days\' AND (is_deleted = 0 OR is_deleted IS NULL)'
       );
       
       return {
@@ -286,21 +251,20 @@ class DatabasePostgres {
     try {
       const result = await this.pool.query(`
         SELECT 
-          COALESCE(c.name, u.name) as client_name,
-          u.telegram_id,
-          COALESCE(c.phone, u.phone) as phone,
+          c.id as client_id,
+          c.name as client_name,
+          c.phone,
+          c.telegram_id,
           COUNT(o.id) as orders_count,
           MAX(o.created_at) as last_order_date,
           MIN(o.created_at) as first_order_date
-        FROM users u
-        LEFT JOIN clients c ON u.telegram_id = c.telegram_id AND c.is_active = 1
-        LEFT JOIN orders o ON u.id = o.user_id
-        WHERE u.telegram_id IS NOT NULL
-        GROUP BY u.telegram_id, COALESCE(c.name, u.name), COALESCE(c.phone, u.phone)
-        HAVING COUNT(o.id) > 0
+        FROM clients c
+        LEFT JOIN orders o ON c.id = o.client_id 
+          AND (o.is_deleted = 0 OR o.is_deleted IS NULL)
+        WHERE c.is_active = 1
+        GROUP BY c.id, c.name, c.phone, c.telegram_id
         ORDER BY orders_count DESC, last_order_date DESC
       `);
-      
       return result.rows;
     } catch (error) {
       throw error;
@@ -317,16 +281,16 @@ class DatabasePostgres {
           o.comment,
           o.status,
           o.created_at,
-          COALESCE(c.name, u.name) as client_name,
-          u.telegram_id,
-          COALESCE(c.phone, u.phone) as phone
+          c.name as client_name,
+          c.telegram_id,
+          c.phone
         FROM orders o
         JOIN users u ON o.user_id = u.id
-        LEFT JOIN clients c ON u.telegram_id = c.telegram_id AND c.is_active = 1
+        JOIN clients c ON u.telegram_id = c.telegram_id
+        WHERE c.is_active = 1 AND (o.is_deleted = 0 OR o.is_deleted IS NULL)
         ORDER BY o.created_at DESC
         LIMIT $1
       `, [limit]);
-      
       return result.rows;
     } catch (error) {
       throw error;
@@ -337,15 +301,14 @@ class DatabasePostgres {
     try {
       const result = await this.pool.query(`
         SELECT 
-          o.warehouse,
+          warehouse,
           COUNT(*) as orders_count,
-          COUNT(DISTINCT u.telegram_id) as unique_clients
-        FROM orders o
-        JOIN users u ON o.user_id = u.id
-        GROUP BY o.warehouse
+          MAX(created_at) as last_order_date
+        FROM orders 
+        WHERE (is_deleted = 0 OR is_deleted IS NULL)
+        GROUP BY warehouse
         ORDER BY orders_count DESC
       `);
-      
       return result.rows;
     } catch (error) {
       throw error;
@@ -354,12 +317,11 @@ class DatabasePostgres {
 
   async createRegistrationRequest(telegramId, name, username) {
     try {
-      await this.pool.query(
-        'INSERT INTO registration_requests (telegram_id, name, username) VALUES ($1, $2, $3) ON CONFLICT (telegram_id) DO UPDATE SET name = $2, username = $3, status = \'pending\'',
+      const result = await this.pool.query(
+        'INSERT INTO registration_requests (telegram_id, name, username) VALUES ($1, $2, $3) ON CONFLICT (telegram_id) DO UPDATE SET name = $2, username = $3 RETURNING id',
         [telegramId, name, username || '']
       );
-      
-      return true;
+      return result.rows[0].id;
     } catch (error) {
       throw error;
     }
@@ -368,11 +330,10 @@ class DatabasePostgres {
   async getRegistrationRequest(telegramId) {
     try {
       const result = await this.pool.query(
-        'SELECT * FROM registration_requests WHERE telegram_id = $1 AND status = \'pending\'',
-        [telegramId]
+        'SELECT * FROM registration_requests WHERE telegram_id = $1 AND status = $2',
+        [telegramId, 'pending']
       );
-      
-      return result.rows[0] || null;
+      return result.rows[0];
     } catch (error) {
       throw error;
     }
@@ -381,9 +342,9 @@ class DatabasePostgres {
   async getPendingRequests() {
     try {
       const result = await this.pool.query(
-        'SELECT * FROM registration_requests WHERE status = \'pending\' ORDER BY created_at DESC'
+        'SELECT * FROM registration_requests WHERE status = $1 ORDER BY created_at DESC',
+        ['pending']
       );
-      
       return result.rows;
     } catch (error) {
       throw error;
@@ -393,11 +354,10 @@ class DatabasePostgres {
   async getPendingRequest(telegramId) {
     try {
       const result = await this.pool.query(
-        'SELECT * FROM registration_requests WHERE telegram_id = $1 AND status = \'pending\'',
-        [telegramId]
+        'SELECT * FROM registration_requests WHERE telegram_id = $1 AND status = $2',
+        [telegramId, 'pending']
       );
-      
-      return result.rows[0] || null;
+      return result.rows[0];
     } catch (error) {
       throw error;
     }
@@ -405,34 +365,14 @@ class DatabasePostgres {
 
   async approveClient(telegramId, name, phone, approvedBy) {
     try {
-      // Проверяем, существует ли уже клиент
-      const existingResult = await this.pool.query(
-        'SELECT * FROM clients WHERE telegram_id = $1',
-        [telegramId]
-      );
-      
-      if (existingResult.rows.length > 0) {
-        console.log(`⚠️ Клиент ${telegramId} уже существует в базе`);
-        
-        await this.pool.query(
-          'UPDATE registration_requests SET status = \'approved\' WHERE telegram_id = $1',
-          [telegramId]
-        );
-        
-        return false;
-      }
-      
-      // Добавляем клиента
       await this.pool.query(
-        'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES ($1, $2, $3, $4)',
+        'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES ($1, $2, $3, $4) ON CONFLICT (telegram_id) DO NOTHING',
         [telegramId, name, phone, approvedBy]
       );
       
-      console.log(`✅ Клиент ${telegramId} (${name}) добавлен в базу`);
-      
       await this.pool.query(
-        'UPDATE registration_requests SET status = \'approved\' WHERE telegram_id = $1',
-        [telegramId]
+        'UPDATE registration_requests SET status = $1 WHERE telegram_id = $2',
+        ['approved', telegramId]
       );
       
       return true;
@@ -444,10 +384,9 @@ class DatabasePostgres {
   async rejectRequest(telegramId) {
     try {
       const result = await this.pool.query(
-        'UPDATE registration_requests SET status = \'rejected\' WHERE telegram_id = $1',
-        [telegramId]
+        'UPDATE registration_requests SET status = $1 WHERE telegram_id = $2',
+        ['rejected', telegramId]
       );
-      
       return result.rowCount > 0;
     } catch (error) {
       throw error;
@@ -460,8 +399,7 @@ class DatabasePostgres {
         'SELECT * FROM clients WHERE telegram_id = $1 AND is_active = 1',
         [telegramId]
       );
-      
-      return result.rows[0] || null;
+      return result.rows[0];
     } catch (error) {
       throw error;
     }
@@ -473,36 +411,18 @@ class DatabasePostgres {
         'UPDATE clients SET name = $1, phone = $2 WHERE telegram_id = $3',
         [name, phone, telegramId]
       );
-      
       return result.rowCount > 0;
     } catch (error) {
       throw error;
     }
   }
 
-  // Управление складами
   async addWarehouse(name, whatsappGroupId = null) {
     try {
-      // Проверяем существование
-      const existingResult = await this.pool.query(
-        'SELECT * FROM warehouses WHERE name = $1 AND is_active = 1',
-        [name]
-      );
-      
-      if (existingResult.rows.length > 0) {
-        console.log(`⚠️ Склад "${name}" уже существует (ID: ${existingResult.rows[0].id})`);
-        const error = new Error(`Склад "${name}" уже существует`);
-        error.code = 'WAREHOUSE_EXISTS';
-        error.existingId = existingResult.rows[0].id;
-        throw error;
-      }
-      
       const result = await this.pool.query(
         'INSERT INTO warehouses (name, whatsapp_group_id) VALUES ($1, $2) RETURNING id',
         [name, whatsappGroupId]
       );
-      
-      console.log(`✅ Склад "${name}" добавлен (ID: ${result.rows[0].id})`);
       return result.rows[0].id;
     } catch (error) {
       throw error;
@@ -515,7 +435,6 @@ class DatabasePostgres {
         'UPDATE warehouses SET whatsapp_group_id = $1 WHERE name = $2 AND is_active = 1',
         [whatsappGroupId, warehouseName]
       );
-      
       return result.rowCount > 0;
     } catch (error) {
       throw error;
@@ -528,7 +447,6 @@ class DatabasePostgres {
         'SELECT whatsapp_group_id FROM warehouses WHERE name = $1 AND is_active = 1',
         [warehouseName]
       );
-      
       return result.rows[0] ? result.rows[0].whatsapp_group_id : null;
     } catch (error) {
       throw error;
@@ -540,7 +458,6 @@ class DatabasePostgres {
       const result = await this.pool.query(
         'SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name'
       );
-      
       return result.rows;
     } catch (error) {
       throw error;
@@ -553,36 +470,18 @@ class DatabasePostgres {
         'UPDATE warehouses SET is_active = 0 WHERE id = $1',
         [id]
       );
-      
       return result.rowCount > 0;
     } catch (error) {
       throw error;
     }
   }
 
-  // Управление товарами
   async addProduct(name) {
     try {
-      // Проверяем существование
-      const existingResult = await this.pool.query(
-        'SELECT * FROM products WHERE name = $1 AND is_active = 1',
-        [name]
-      );
-      
-      if (existingResult.rows.length > 0) {
-        console.log(`⚠️ Товар "${name}" уже существует (ID: ${existingResult.rows[0].id})`);
-        const error = new Error(`Товар "${name}" уже существует`);
-        error.code = 'PRODUCT_EXISTS';
-        error.existingId = existingResult.rows[0].id;
-        throw error;
-      }
-      
       const result = await this.pool.query(
         'INSERT INTO products (name) VALUES ($1) RETURNING id',
         [name]
       );
-      
-      console.log(`✅ Товар "${name}" добавлен (ID: ${result.rows[0].id})`);
       return result.rows[0].id;
     } catch (error) {
       throw error;
@@ -594,7 +493,6 @@ class DatabasePostgres {
       const result = await this.pool.query(
         'SELECT * FROM products WHERE is_active = 1 ORDER BY name'
       );
-      
       return result.rows;
     } catch (error) {
       throw error;
@@ -607,16 +505,61 @@ class DatabasePostgres {
         'UPDATE products SET is_active = 0 WHERE id = $1',
         [id]
       );
-      
       return result.rowCount > 0;
     } catch (error) {
       throw error;
     }
   }
 
-  close() {
-    this.pool.end();
+  // Методы мягкого удаления
+  async softDeleteOrder(orderId, deletedBy = 'admin') {
+    try {
+      const result = await this.pool.query(
+        'UPDATE orders SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP, deleted_by = $1 WHERE id = $2',
+        [deletedBy, orderId]
+      );
+      console.log(`✅ Заявка ${orderId} помечена как удаленная`);
+      return result.rowCount > 0;
+    } catch (error) {
+      console.error('❌ Ошибка мягкого удаления заявки:', error);
+      throw error;
+    }
+  }
+
+  async restoreOrder(orderId, restoredBy = 'admin') {
+    try {
+      const result = await this.pool.query(
+        'UPDATE orders SET is_deleted = 0, deleted_at = NULL, deleted_by = NULL, restored_at = CURRENT_TIMESTAMP, restored_by = $1 WHERE id = $2',
+        [restoredBy, orderId]
+      );
+      console.log(`✅ Заявка ${orderId} восстановлена из корзины`);
+      return result.rowCount > 0;
+    } catch (error) {
+      console.error('❌ Ошибка восстановления заявки:', error);
+      throw error;
+    }
+  }
+
+  async getDeletedOrders() {
+    try {
+      const result = await this.pool.query(`
+        SELECT o.*, c.name as client_name, c.phone 
+        FROM orders o
+        LEFT JOIN clients c ON o.client_id = c.id
+        WHERE o.is_deleted = 1
+        ORDER BY o.deleted_at DESC
+      `);
+      console.log(`📊 Найдено удаленных заявок: ${result.rows.length}`);
+      return result.rows;
+    } catch (error) {
+      console.error('❌ Ошибка получения удаленных заявок:', error);
+      throw error;
+    }
+  }
+
+  async close() {
+    await this.pool.end();
   }
 }
 
-module.exports = new DatabasePostgres();
+module.exports = new Database();
