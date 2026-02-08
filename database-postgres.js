@@ -267,18 +267,18 @@ class DatabasePostgres {
     try {
       const result = await this.pool.query(`
         SELECT 
-          c.name as client_name,
-          c.telegram_id,
-          c.phone,
+          COALESCE(c.name, u.name) as client_name,
+          u.telegram_id,
+          COALESCE(c.phone, u.phone) as phone,
           COUNT(o.id) as orders_count,
           MAX(o.created_at) as last_order_date,
           MIN(o.created_at) as first_order_date
-        FROM clients c
-        LEFT JOIN orders o ON c.telegram_id = (
-          SELECT u.telegram_id FROM users u WHERE u.id = o.user_id
-        )
-        WHERE c.is_active = 1
-        GROUP BY c.telegram_id, c.name, c.phone
+        FROM users u
+        LEFT JOIN clients c ON u.telegram_id = c.telegram_id AND c.is_active = 1
+        LEFT JOIN orders o ON u.id = o.user_id
+        WHERE u.telegram_id IS NOT NULL
+        GROUP BY u.telegram_id, COALESCE(c.name, u.name), COALESCE(c.phone, u.phone)
+        HAVING COUNT(o.id) > 0
         ORDER BY orders_count DESC, last_order_date DESC
       `);
       
@@ -298,13 +298,12 @@ class DatabasePostgres {
           o.comment,
           o.status,
           o.created_at,
-          c.name as client_name,
-          c.telegram_id,
-          c.phone
+          COALESCE(c.name, u.name) as client_name,
+          u.telegram_id,
+          COALESCE(c.phone, u.phone) as phone
         FROM orders o
         JOIN users u ON o.user_id = u.id
-        JOIN clients c ON u.telegram_id = c.telegram_id
-        WHERE c.is_active = 1
+        LEFT JOIN clients c ON u.telegram_id = c.telegram_id AND c.is_active = 1
         ORDER BY o.created_at DESC
         LIMIT $1
       `, [limit]);
