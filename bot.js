@@ -5,6 +5,74 @@ const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 const dataManager = require('./data-manager');
 
+// 🔧 Автоматическая миграция PostgreSQL при запуске
+async function autoMigrate() {
+  if (process.env.DATABASE_URL) {
+    console.log('🔄 Проверка необходимости миграции PostgreSQL...');
+    try {
+      const { Pool } = require('pg');
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      });
+      
+      const client = await pool.connect();
+      
+      // Проверяем наличие колонки is_deleted
+      const checkResult = await client.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'orders' AND column_name = 'is_deleted'
+      `);
+      
+      if (checkResult.rows.length === 0) {
+        console.log('⚠️ Колонки отсутствуют, выполняем миграцию...');
+        
+        // Добавляем колонки
+        await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_deleted INTEGER DEFAULT 0');
+        await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP');
+        await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_by TEXT');
+        await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS restored_at TIMESTAMP');
+        await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS restored_by TEXT');
+        await client.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_id INTEGER');
+        
+        console.log('✅ Колонки добавлены');
+        
+        // Заполняем client_id
+        const updateResult = await client.query(`
+          UPDATE orders o
+          SET client_id = (
+            SELECT c.id 
+            FROM users u 
+            JOIN clients c ON u.telegram_id = c.telegram_id 
+            WHERE u.id = o.user_id
+          )
+          WHERE client_id IS NULL
+        `);
+        console.log(`✅ Обновлено записей: ${updateResult.rowCount}`);
+        
+        // Добавляем whatsapp_group_id
+        await client.query('ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS whatsapp_group_id TEXT');
+        
+        // Настраиваем маршрутизацию
+        await client.query("UPDATE warehouses SET whatsapp_group_id = '120363419535622239@g.us' WHERE name = 'ЧБалхи'");
+        await client.query("UPDATE warehouses SET whatsapp_group_id = '120363422710745455@g.us' WHERE name = 'ЗаводТЧ'");
+        
+        console.log('✅ Маршрутизация настроена');
+        console.log('🎉 Автоматическая миграция завершена!');
+      } else {
+        console.log('✅ Миграция не требуется - все колонки на месте');
+      }
+      
+      client.release();
+      await pool.end();
+    } catch (error) {
+      console.error('⚠️ Ошибка автоматической миграции:', error.message);
+      console.log('💡 Выполните миграцию вручную: npm run migrate-postgres');
+    }
+  }
+}
+
 // 🔧 Загружаем исправления для Order Bot (только если используется SQLite)
 try {
   if (process.env.DB_PATH && !process.env.DATABASE_URL) {
@@ -905,6 +973,9 @@ bot.command('cancel', (ctx) => {
 // Запуск бота
 async function startBot() {
   try {
+    // Выполняем автоматическую миграцию перед запуском
+    await autoMigrate();
+    
     await bot.launch();
     console.log('🤖 Бот запущен успешно!');
     const botInfo = await bot.telegram.getMe();
