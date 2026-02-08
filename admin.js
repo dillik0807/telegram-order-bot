@@ -1649,8 +1649,11 @@ function setupAdminCommands(bot) {
         message += `   🏬 Склад: ${order.warehouse}\n`;
         message += `   🚛 Транспорт: ${order.transport_number || 'Не указан'}\n`;
         message += `   📅 ${orderDate.toLocaleDateString('ru-RU')} ${orderDate.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})}\n`;
-        message += `   📝 ${order.comment || 'Без комментария'}\n\n`;
+        message += `   📝 ${order.comment || 'Без комментария'}\n`;
+        message += `   ✏️ Редактировать: /editorder ${order.id}\n\n`;
       });
+      
+      message += '\n💡 Используйте /editorder ID для редактирования заявки';
       
       // Разбиваем длинное сообщение на части если нужно
       if (message.length > 4000) {

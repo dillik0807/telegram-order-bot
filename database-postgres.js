@@ -69,6 +69,9 @@ class DatabasePostgres {
           transport_number TEXT,
           comment TEXT,
           status TEXT DEFAULT 'new',
+          telegram_message_id TEXT,
+          whatsapp_message_id TEXT,
+          telegram_group_id TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (user_id) REFERENCES users(id)
         )

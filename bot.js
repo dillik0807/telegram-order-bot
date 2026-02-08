@@ -365,6 +365,18 @@ bot.on('text', async (ctx) => {
     return;
   }
   
+  // Проверяем, есть ли активная сессия редактирования
+  try {
+    const OrderEditManager = require('./order-edit-manager');
+    const editManager = new OrderEditManager(bot);
+    const handled = await editManager.handleEdit(ctx);
+    if (handled) {
+      return; // Сообщение обработано менеджером редактирования
+    }
+  } catch (error) {
+    // Если модуль не загружен или ошибка - продолжаем обычную обработку
+  }
+  
   // Проверка прав доступа
   const isAdminUser = admin.isAdmin(userId);
   const isClientUser = await database.isClient(userId);
@@ -647,9 +659,10 @@ bot.on('text', async (ctx) => {
       const orderMessage = formatOrder(data);
       
       // Сохранение в БД
+      let orderId = null;
       try {
         const user = await database.getOrCreateUser(userId, data.name, data.phone);
-        const orderId = await database.createOrder(
+        orderId = await database.createOrder(
           user.id,
           data.warehouse,
           data.transport,
@@ -668,10 +681,12 @@ bot.on('text', async (ctx) => {
       // Отправка в Telegram группу
       const groupId = process.env.TELEGRAM_GROUP_ID;
       let telegramSent = false;
+      let telegramMessageId = null;
       
       if (groupId) {
         try {
-          await bot.telegram.sendMessage(groupId, orderMessage);
+          const sentMessage = await bot.telegram.sendMessage(groupId, orderMessage);
+          telegramMessageId = sentMessage.message_id;
           console.log('✅ Заявка отправлена в Telegram группу');
           telegramSent = true;
         } catch (error) {
@@ -681,6 +696,7 @@ bot.on('text', async (ctx) => {
 
       // 🎯 УМНАЯ МАРШРУТИЗАЦИЯ WhatsApp по складам
       let whatsappSent = false;
+      let whatsappMessageId = null;
       
       try {
         console.log(`🔍 Проверка маршрутизации для склада: "${data.warehouse}"`);
@@ -702,7 +718,12 @@ bot.on('text', async (ctx) => {
         if (warehouseWhatsAppGroup) {
           // Отправляем в группу конкретного склада
           console.log(`📤 Отправка заявки в WhatsApp группу склада "${data.warehouse}": ${warehouseWhatsAppGroup}`);
-          whatsappSent = await whatsapp.sendToGroup(orderMessage, warehouseWhatsAppGroup);
+          const whatsappResult = await whatsapp.sendToGroup(orderMessage, warehouseWhatsAppGroup);
+          whatsappSent = whatsappResult;
+          // WhatsApp API может вернуть ID сообщения, сохраняем если есть
+          if (typeof whatsappResult === 'object' && whatsappResult.messageId) {
+            whatsappMessageId = whatsappResult.messageId;
+          }
           
           if (whatsappSent) {
             console.log(`✅ Заявка отправлена в WhatsApp группу склада "${data.warehouse}"`);
@@ -722,15 +743,40 @@ bot.on('text', async (ctx) => {
           if (whatsappGroupId) {
             // Отправка в общую WhatsApp группу
             console.log(`📤 Отправка в общую WhatsApp группу: ${whatsappGroupId}`);
-            whatsappSent = await whatsapp.sendToGroup(orderMessage, whatsappGroupId);
+            const whatsappResult = await whatsapp.sendToGroup(orderMessage, whatsappGroupId);
+            whatsappSent = whatsappResult;
+            if (typeof whatsappResult === 'object' && whatsappResult.messageId) {
+              whatsappMessageId = whatsappResult.messageId;
+            }
           } else if (whatsappRecipient) {
             // Отправка личному получателю
             console.log(`📤 Отправка личному получателю: ${whatsappRecipient}`);
-            whatsappSent = await whatsapp.sendMessage(orderMessage);
+            const whatsappResult = await whatsapp.sendMessage(orderMessage);
+            whatsappSent = whatsappResult;
+            if (typeof whatsappResult === 'object' && whatsappResult.messageId) {
+              whatsappMessageId = whatsappResult.messageId;
+            }
           }
         }
       } catch (error) {
         console.error('❌ Ошибка отправки в WhatsApp:', error);
+      }
+      
+      // 📝 Сохраняем ID сообщений для возможности редактирования
+      if (orderId && (telegramMessageId || whatsappMessageId)) {
+        try {
+          const OrderEditManager = require('./order-edit-manager');
+          const editManager = new OrderEditManager(bot);
+          await editManager.saveMessageIds(
+            orderId,
+            telegramMessageId,
+            whatsappMessageId,
+            groupId
+          );
+          console.log(`✅ ID сообщений сохранены для заявки #${orderId}`);
+        } catch (error) {
+          console.error('❌ Ошибка сохранения ID сообщений:', error);
+        }
       }
       
       // Уведомление пользователя
@@ -906,9 +952,95 @@ bot.command('cancel', (ctx) => {
   });
 });
 
-// Запуск бота
-async function startBot() {
+// Команда /editorder - редактировать заявку
+bot.command('editorder', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  // Проверка прав
+  const isAdminUser = admin.isAdmin(userId);
+  const isClientUser = await database.isClient(userId);
+  
+  if (!isAdminUser && !isClientUser) {
+    return ctx.reply('❌ У вас нет доступа к боту');
+  }
+  
+  // Получаем ID заявки из команды
+  const args = ctx.message.text.split(' ');
+  if (args.length < 2) {
+    return ctx.reply('❌ Укажите ID заявки\n\nПример: /editorder 123');
+  }
+  
+  const orderId = parseInt(args[1]);
+  if (isNaN(orderId)) {
+    return ctx.reply('❌ Неверный ID заявки');
+  }
+  
+  // Проверяем, что заявка существует
+  const order = await database.getOrderWithItems(orderId);
+  if (!order) {
+    return ctx.reply('❌ Заявка не найдена');
+  }
+  
+  // Если клиент - проверяем, что это его заявка
+  if (!isAdminUser) {
+    const orders = await database.getRecentOrdersWithClients(1000);
+    const orderInfo = orders.find(o => o.id === orderId);
+    if (!orderInfo || orderInfo.telegram_id !== userId) {
+      return ctx.reply('❌ Вы можете редактировать только свои заявки');
+    }
+  }
+  
+  // Запускаем редактирование
+  const OrderEditManager = require('./order-edit-manager');
+  const editManager = new OrderEditManager(bot);
+  await editManager.startEdit(ctx, orderId);
+});
+
+// Команда /myorders - мои заявки
+bot.command('myorders', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  const isAdminUser = admin.isAdmin(userId);
+  const isClientUser = await database.isClient(userId);
+  
+  if (!isAdminUser && !isClientUser) {
+    return ctx.reply('❌ У вас нет доступа к боту');
+  }
+  
   try {
+    // Получаем заявки пользователя
+    const allOrders = await database.getRecentOrdersWithClients(1000);
+    const userOrders = allOrders.filter(o => o.telegram_id === userId);
+    
+    if (userOrders.length === 0) {
+      return ctx.reply('📋 У вас пока нет заявок');
+    }
+    
+    let message = '📋 Ваши заявки:\n\n';
+    
+    userOrders.slice(0, 10).forEach((order, index) => {
+      const date = new Date(order.created_at).toLocaleDateString('ru-RU');
+      message += `${index + 1}. Заявка #${order.id}\n`;
+      message += `   🏬 ${order.warehouse}\n`;
+      message += `   📅 ${date}\n`;
+      message += `   /editorder ${order.id}\n\n`;
+    });
+    
+    if (userOrders.length > 10) {
+      message += `... и еще ${userOrders.length - 10} заявок\n`;
+    }
+    
+    ctx.reply(message);
+    
+  } catch (error) {
+    console.error('Ошибка получения заявок:', error);
+    ctx.reply('❌ Ошибка при загрузке заявок');
+  }
+});
+
+// Duplicate handler removed - edit handling is integrated in the main bot.on('text') handler above
+
+// Запуск бота
     await bot.launch();
     console.log('🤖 Бот запущен успешно!');
     const botInfo = await bot.telegram.getMe();
