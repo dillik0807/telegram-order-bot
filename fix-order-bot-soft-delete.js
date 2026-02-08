@@ -12,95 +12,81 @@ console.log('🗑️ Загрузка системы мягкого удален
 function fixDatabaseSoftDelete() {
     console.log('🗑️ Применение системы мягкого удаления к базе данных...');
     
-    try {
-        // Расширяем класс Database для поддержки мягкого удаления
-        const originalDatabase = require('./database');
-        
-        // Проверяем, что это SQLite версия (имеет свойство db)
-        if (!originalDatabase.db) {
-            console.log('⚠️ PostgreSQL версия - пропускаем расширение методов');
-            return;
-        }
-        
-        // Добавляем методы мягкого удаления только для SQLite
-        if (originalDatabase.constructor && originalDatabase.constructor.prototype) {
-            const proto = originalDatabase.constructor.prototype;
+    // Расширяем класс Database для поддержки мягкого удаления
+    const originalDatabase = require('./database');
+    
+    // Добавляем методы мягкого удаления
+    originalDatabase.prototype.softDeleteOrder = function(orderId, deletedBy = 'admin') {
+        return new Promise((resolve, reject) => {
+            const query = `
+                UPDATE orders 
+                SET is_deleted = 1, 
+                    deleted_at = datetime('now'), 
+                    deleted_by = ?
+                WHERE id = ?
+            `;
             
-            proto.softDeleteOrder = function(orderId, deletedBy = 'admin') {
-                return new Promise((resolve, reject) => {
-                    const query = `
-                        UPDATE orders 
-                        SET is_deleted = 1, 
-                            deleted_at = datetime('now'), 
-                            deleted_by = ?
-                        WHERE id = ?
-                    `;
-                    
-                    this.db.run(query, [deletedBy, orderId], function(err) {
-                        if (err) {
-                            console.error('❌ Ошибка мягкого удаления заявки:', err);
-                            reject(err);
-                        } else {
-                            console.log(`✅ Заявка ${orderId} помечена как удаленная`);
-                            resolve({ changes: this.changes });
-                        }
-                    });
-                });
-            };
+            this.db.run(query, [deletedBy, orderId], function(err) {
+                if (err) {
+                    console.error('❌ Ошибка мягкого удаления заявки:', err);
+                    reject(err);
+                } else {
+                    console.log(`✅ Заявка ${orderId} помечена как удаленная`);
+                    resolve({ changes: this.changes });
+                }
+            });
+        });
+    };
+    
+    // Восстановление из корзины
+    originalDatabase.prototype.restoreOrder = function(orderId, restoredBy = 'admin') {
+        return new Promise((resolve, reject) => {
+            const query = `
+                UPDATE orders 
+                SET is_deleted = 0, 
+                    deleted_at = NULL, 
+                    deleted_by = NULL,
+                    restored_at = datetime('now'),
+                    restored_by = ?
+                WHERE id = ?
+            `;
             
-            // Восстановление из корзины
-            proto.restoreOrder = function(orderId, restoredBy = 'admin') {
-                return new Promise((resolve, reject) => {
-                    const query = `
-                        UPDATE orders 
-                        SET is_deleted = 0, 
-                            deleted_at = NULL, 
-                            deleted_by = NULL,
-                            restored_at = datetime('now'),
-                            restored_by = ?
-                        WHERE id = ?
-                    `;
-                    
-                    this.db.run(query, [restoredBy, orderId], function(err) {
-                        if (err) {
-                            console.error('❌ Ошибка восстановления заявки:', err);
-                            reject(err);
-                        } else {
-                            console.log(`✅ Заявка ${orderId} восстановлена из корзины`);
-                            resolve({ changes: this.changes });
-                        }
-                    });
-                });
-            };
+            this.db.run(query, [restoredBy, orderId], function(err) {
+                if (err) {
+                    console.error('❌ Ошибка восстановления заявки:', err);
+                    reject(err);
+                } else {
+                    console.log(`✅ Заявка ${orderId} восстановлена из корзины`);
+                    resolve({ changes: this.changes });
+                }
+            });
+        });
+    };
+    
+    // Получение удаленных заявок (корзина)
+    originalDatabase.prototype.getDeletedOrders = function() {
+        return new Promise((resolve, reject) => {
+            const query = `
+                SELECT o.*, c.name as client_name, c.phone 
+                FROM orders o
+                LEFT JOIN clients c ON o.client_id = c.id
+                WHERE o.is_deleted = 1
+                ORDER BY o.deleted_at DESC
+            `;
             
-            // Получение удаленных заявок (корзина)
-            proto.getDeletedOrders = function() {
-                return new Promise((resolve, reject) => {
-                    const query = `
-                        SELECT o.*, c.name as client_name, c.phone 
-                        FROM orders o
-                        LEFT JOIN clients c ON o.client_id = c.id
-                        WHERE o.is_deleted = 1
-                        ORDER BY o.deleted_at DESC
-                    `;
-                    
-                    this.db.all(query, [], (err, rows) => {
-                        if (err) {
-                            console.error('❌ Ошибка получения удаленных заявок:', err);
-                            reject(err);
-                        } else {
-                            console.log(`📊 Найдено удаленных заявок: ${rows.length}`);
-                            resolve(rows);
-                        }
-                    });
-                });
-            };
-            
-            console.log('✅ Методы мягкого удаления добавлены в Database');
-        }
-    } catch (error) {
-        console.log('⚠️ Не удалось расширить Database:', error.message);
-    }
+            this.db.all(query, [], (err, rows) => {
+                if (err) {
+                    console.error('❌ Ошибка получения удаленных заявок:', err);
+                    reject(err);
+                } else {
+                    console.log(`📊 Найдено удаленных заявок: ${rows.length}`);
+                    resolve(rows);
+                }
+            });
+        });
+    };
+    
+    console.log('✅ Методы мягкого удаления добавлены в Database');
 }
 
 /**
@@ -109,26 +95,12 @@ function fixDatabaseSoftDelete() {
 function fixStatsFunctions() {
     console.log('📊 Исправление функций статистики...');
     
-    try {
-        const database = require('./database');
-        
-        // Проверяем, что это SQLite версия
-        if (!database.db) {
-            console.log('⚠️ PostgreSQL версия - пропускаем исправление статистики');
-            return;
-        }
-        
-        // Сохраняем оригинальные методы
-        const DatabaseClass = database.constructor;
-        if (!DatabaseClass || !DatabaseClass.prototype) {
-            console.log('⚠️ Не удалось получить прототип Database');
-            return;
-        }
-        
-        const proto = DatabaseClass.prototype;
-        const originalGetStats = proto.getStats;
-        const originalGetDetailedOrderStats = proto.getDetailedOrderStats;
-        const originalGetWarehouseStats = proto.getWarehouseStats;
+    const database = require('./database');
+    
+    // Сохраняем оригинальные методы
+    const originalGetStats = database.prototype.getStats;
+    const originalGetDetailedOrderStats = database.prototype.getDetailedOrderStats;
+    const originalGetWarehouseStats = database.prototype.getWarehouseStats;
     
     // Переопределяем getStats с исключением удаленных
     database.prototype.getStats = function() {
@@ -235,9 +207,6 @@ function fixStatsFunctions() {
     };
     
     console.log('✅ Функции статистики исправлены');
-    } catch (error) {
-        console.log('⚠️ Не удалось исправить функции статистики:', error.message);
-    }
 }
 
 /**
@@ -246,14 +215,7 @@ function fixStatsFunctions() {
 function fixExportFunctions() {
     console.log('📤 Исправление функций экспорта...');
     
-    try {
-        const ExcelExporter = require('./excel-export');
-        
-        // Проверяем, что ExcelExporter существует
-        if (!ExcelExporter || !ExcelExporter.prototype) {
-            console.log('⚠️ ExcelExporter не найден или не имеет прототипа');
-            return;
-        }
+    const ExcelExporter = require('./excel-export');
     
     // Сохраняем оригинальные методы
     const originalExportRecentOrders = ExcelExporter.prototype.exportRecentOrders;
@@ -316,9 +278,6 @@ function fixExportFunctions() {
     };
     
     console.log('✅ Функции экспорта исправлены');
-    } catch (error) {
-        console.log('⚠️ Не удалось исправить функции экспорта:', error.message);
-    }
 }
 
 /**
@@ -327,36 +286,26 @@ function fixExportFunctions() {
 function createSoftDeleteTables() {
     console.log('🗄️ Создание таблиц для мягкого удаления...');
     
-    try {
-        const database = require('./database');
-        
-        // Проверяем, что это SQLite версия
-        if (!database.db) {
-            console.log('⚠️ PostgreSQL версия - пропускаем создание таблиц');
-            return;
-        }
-        
-        // Добавляем колонки для мягкого удаления в таблицу orders
-        const alterQueries = [
-            `ALTER TABLE orders ADD COLUMN is_deleted INTEGER DEFAULT 0`,
-            `ALTER TABLE orders ADD COLUMN deleted_at TEXT`,
-            `ALTER TABLE orders ADD COLUMN deleted_by TEXT`,
-            `ALTER TABLE orders ADD COLUMN restored_at TEXT`,
-            `ALTER TABLE orders ADD COLUMN restored_by TEXT`
-        ];
-        
-        alterQueries.forEach(query => {
-            database.db.run(query, (err) => {
-                if (err && !err.message.includes('duplicate column name')) {
-                    console.log(`⚠️ Колонка уже существует или другая ошибка: ${err.message}`);
-                }
-            });
+    const database = require('./database');
+    
+    // Добавляем колонки для мягкого удаления в таблицу orders
+    const alterQueries = [
+        `ALTER TABLE orders ADD COLUMN is_deleted INTEGER DEFAULT 0`,
+        `ALTER TABLE orders ADD COLUMN deleted_at TEXT`,
+        `ALTER TABLE orders ADD COLUMN deleted_by TEXT`,
+        `ALTER TABLE orders ADD COLUMN restored_at TEXT`,
+        `ALTER TABLE orders ADD COLUMN restored_by TEXT`
+    ];
+    
+    alterQueries.forEach(query => {
+        database.db.run(query, (err) => {
+            if (err && !err.message.includes('duplicate column name')) {
+                console.log(`⚠️ Колонка уже существует или другая ошибка: ${err.message}`);
+            }
         });
-        
-        console.log('✅ Таблицы для мягкого удаления подготовлены');
-    } catch (error) {
-        console.log('⚠️ Не удалось создать таблицы:', error.message);
-    }
+    });
+    
+    console.log('✅ Таблицы для мягкого удаления подготовлены');
 }
 
 /**

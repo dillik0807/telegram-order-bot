@@ -2,7 +2,7 @@
  * Менеджер данных для складов и товаров
  */
 
-const database = require('./database-wrapper');
+const database = require('./database');
 
 // Глобальные переменные для хранения данных
 let warehouses = [];
@@ -64,13 +64,6 @@ async function addWarehouseAndReload(name) {
     return warehouseId;
   } catch (error) {
     console.error('❌ Ошибка добавления склада:', error);
-    
-    // Если склад уже существует, просто обновляем данные
-    if (error.code === 'WAREHOUSE_EXISTS') {
-      console.log('⚠️ Склад уже существует, обновляем данные...');
-      await loadWarehousesAndProducts();
-    }
-    
     throw error;
   }
 }
@@ -88,13 +81,6 @@ async function addProductAndReload(name) {
     return productId;
   } catch (error) {
     console.error('❌ Ошибка добавления товара:', error);
-    
-    // Если товар уже существует, просто обновляем данные
-    if (error.code === 'PRODUCT_EXISTS') {
-      console.log('⚠️ Товар уже существует, обновляем данные...');
-      await loadWarehousesAndProducts();
-    }
-    
     throw error;
   }
 }

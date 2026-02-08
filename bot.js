@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
-const database = require('./database-wrapper');
+const database = require('./database');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 const dataManager = require('./data-manager');
@@ -169,17 +169,11 @@ bot.command('start', async (ctx) => {
   const userId = ctx.from.id;
   const userName = ctx.from.first_name || ctx.from.username || 'Пользователь';
   
-  console.log(`\n🔍 Команда /start от пользователя ${userId} (${userName})`);
-  
   // Проверка прав доступа
   const isAdminUser = admin.isAdmin(userId);
   const isClientUser = await database.isClient(userId);
   
-  console.log(`   isAdmin: ${isAdminUser}`);
-  console.log(`   isClient: ${isClientUser}`);
-  
   if (isAdminUser) {
-    console.log(`   ✅ Показываем админ-меню`);
     const keyboard = [
       [{ text: '📦 Создать заявку' }],
       [{ text: '👨‍💼 Панель администратора' }]
@@ -193,7 +187,6 @@ bot.command('start', async (ctx) => {
   }
   
   if (isClientUser) {
-    console.log(`   ✅ Показываем клиентское меню`);
     // Показываем постоянное меню
     const keyboard = [
       [{ text: '🏬 Склад' }]
@@ -206,20 +199,15 @@ bot.command('start', async (ctx) => {
     );
   }
   
-  console.log(`   ⚠️ Пользователь не зарегистрирован`);
-  
   // Пользователь не зарегистрирован - отправляем запрос администратору
   const pendingRequest = await database.getPendingRequest(userId);
   
   if (pendingRequest) {
-    console.log(`   ⏳ У пользователя уже есть ожидающий запрос`);
     return ctx.reply(
       '⏳ Ваш запрос на регистрацию уже отправлен администратору.\n\n' +
       'Пожалуйста, ожидайте подтверждения.'
     );
   }
-  
-  console.log(`   📝 Создаем новый запрос на регистрацию`);
   
   // Создаем запрос на регистрацию
   await database.createRegistrationRequest(userId, userName, ctx.from.username);
@@ -509,33 +497,7 @@ bot.on('text', async (ctx) => {
       }
       
       if (text === '✅ Продолжить') {
-        // 🔧 Проверяем, является ли пользователь администратором
-        const isAdminUser = admin.isAdmin(userId);
-        
-        if (isAdminUser) {
-          // Администратор - предлагаем выбор: для себя или для клиента
-          data.step = 'choose_client_type';
-          orderData.set(userId, data);
-          
-          const keyboard = [
-            [{ text: '👤 Для себя' }],
-            [{ text: '👥 Для клиента' }]
-          ];
-          
-          let summary = '📋 Создание заявки:\n\n';
-          summary += `🏬 Склад: ${data.warehouse}\n\n`;
-          summary += 'Товары:\n';
-          data.items.forEach((item, i) => {
-            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-          });
-          summary += '\n❓ Для кого создается заявка?';
-          
-          return ctx.reply(summary, { 
-            reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } 
-          });
-        }
-        
-        // Для обычных клиентов - проверяем сохраненные данные
+        // Проверяем, есть ли сохраненные данные клиента
         const client = await database.getClient(userId);
         
         if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
@@ -582,73 +544,12 @@ bot.on('text', async (ctx) => {
       }
     }
 
-    // Шаг 4.5: Выбор типа заявки (для администратора)
-    if (data.step === 'choose_client_type') {
-      if (text === '👤 Для себя') {
-        // Администратор создает заявку для себя - используем его данные
-        const client = await database.getClient(userId);
-        
-        if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
-          // Данные администратора уже есть - используем их
-          data.name = client.name;
-          data.phone = client.phone;
-          data.isForSelf = true;
-          data.step = 'transport';
-          orderData.set(userId, data);
-          
-          let summary = '📋 Ваша заявка:\n\n';
-          summary += `👤 Имя: ${client.name}\n`;
-          summary += `📞 Телефон: ${client.phone}\n`;
-          summary += `🏬 Склад: ${data.warehouse}\n\n`;
-          summary += 'Товары:\n';
-          data.items.forEach((item, i) => {
-            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-          });
-          summary += '\n🚚 Введите номер транспорта:\n(например: 1234 AB)';
-          
-          return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-        } else {
-          // Данных администратора нет - запрашиваем
-          data.isForSelf = true;
-          data.step = 'name';
-          orderData.set(userId, data);
-          
-          return ctx.reply('📝 Введите ваше имя:', { reply_markup: { remove_keyboard: true } });
-        }
-      }
-      
-      if (text === '👥 Для клиента') {
-        // Администратор создает заявку для клиента - запрашиваем данные клиента
-        data.isForSelf = false;
-        data.step = 'name';
-        orderData.set(userId, data);
-        
-        let summary = '📋 Создание заявки для клиента:\n\n';
-        summary += `🏬 Склад: ${data.warehouse}\n\n`;
-        summary += 'Товары:\n';
-        data.items.forEach((item, i) => {
-          summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-        });
-        summary += '\n📝 Введите имя клиента:';
-        
-        return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-      }
-    }
-
     // Шаг 5: Имя (если первый раз или обновление)
     if (data.step === 'name') {
       let finalName = text;
       
-      // 🔧 Проверяем, является ли пользователь администратором
-      const isAdminUser = admin.isAdmin(userId);
-      
       // Если пользователь отправил "-", используем существующее имя
       if (text === '-') {
-        // Для администратора, создающего заявку для клиента - нельзя использовать "-"
-        if (isAdminUser && data.isForSelf === false) {
-          return ctx.reply('❌ Администратор должен ввести имя клиента.\nВведите имя клиента:');
-        }
-        
         const client = await database.getClient(userId);
         if (client && client.name && client.name.trim() !== '') {
           finalName = client.name;
@@ -661,12 +562,7 @@ bot.on('text', async (ctx) => {
       data.step = 'phone';
       orderData.set(userId, data);
       
-      // Для администратора, создающего заявку для клиента - всегда запрашиваем телефон клиента
-      if (isAdminUser && data.isForSelf === false) {
-        return ctx.reply('📞 Введите номер телефона клиента:\n(например: +992900000000)');
-      }
-      
-      // Для администратора, создающего заявку для себя, или для обычных клиентов
+      // Проверяем, есть ли сохраненный телефон
       const client = await database.getClient(userId);
       if (client && client.phone && client.phone.trim() !== '') {
         return ctx.reply(
@@ -683,16 +579,8 @@ bot.on('text', async (ctx) => {
     if (data.step === 'phone') {
       let finalPhone = text;
       
-      // 🔧 Проверяем, является ли пользователь администратором
-      const isAdminUser = admin.isAdmin(userId);
-      
       // Если пользователь отправил "-", используем существующий телефон
       if (text === '-') {
-        // Для администратора, создающего заявку для клиента - нельзя использовать "-"
-        if (isAdminUser && data.isForSelf === false) {
-          return ctx.reply('❌ Администратор должен ввести телефон клиента.\nВведите номер телефона клиента:');
-        }
-        
         const client = await database.getClient(userId);
         if (client && client.phone && client.phone.trim() !== '') {
           finalPhone = client.phone;
@@ -705,17 +593,12 @@ bot.on('text', async (ctx) => {
       data.step = 'transport';
       orderData.set(userId, data);
       
-      // Для администратора, создающего заявку для клиента - не сохраняем данные клиента в профиль администратора
-      if (isAdminUser && data.isForSelf === false) {
-        console.log(`📝 Администратор ${userId} создает заявку для клиента: ${data.name}, ${data.phone}`);
-      } else {
-        // Сохраняем имя и телефон в базу данных для обычных клиентов и администратора (если для себя)
-        try {
-          await database.updateClient(userId, data.name, data.phone);
-          console.log(`✅ Обновлены данные клиента ${userId}: ${data.name}, ${data.phone}`);
-        } catch (error) {
-          console.error('Ошибка сохранения данных клиента:', error);
-        }
+      // Сохраняем имя и телефон в базу данных
+      try {
+        await database.updateClient(userId, data.name, data.phone);
+        console.log(`✅ Обновлены данные клиента ${userId}: ${data.name}, ${data.phone}`);
+      } catch (error) {
+        console.error('Ошибка сохранения данных клиента:', error);
       }
       
       return ctx.reply('🚚 Введите номер транспорта:\n(например: 1234 AB)');
@@ -753,21 +636,6 @@ bot.on('text', async (ctx) => {
       
       // Сохранение в БД
       try {
-        // 🔧 ИСПРАВЛЕНИЕ: Убеждаемся, что администратор тоже есть в таблице clients
-        const isAdminUser = admin.isAdmin(userId);
-        if (isAdminUser) {
-          // Проверяем, есть ли админ в таблице clients
-          const adminClient = await database.getClient(userId);
-          if (!adminClient) {
-            // Добавляем админа в таблицу clients, чтобы его заявки попадали в статистику
-            console.log(`📝 Добавляем администратора ${userId} в таблицу clients для статистики`);
-            await database.addClient(userId, data.name, data.phone, userId);
-          } else {
-            // Обновляем данные админа, если они изменились
-            await database.updateClient(userId, data.name, data.phone);
-          }
-        }
-        
         const user = await database.getOrCreateUser(userId, data.name, data.phone);
         const orderId = await database.createOrder(
           user.id,

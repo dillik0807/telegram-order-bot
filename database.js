@@ -1,37 +1,14 @@
 const sqlite3 = require('sqlite3').verbose();
-const fs = require('fs');
-const path = require('path');
 
 const dbPath = process.env.DB_PATH || './orders.db';
-
-// 🔧 Создаем директорию для базы данных, если её нет (для Railway Volume)
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-  try {
-    fs.mkdirSync(dbDir, { recursive: true });
-    console.log(`📁 Создана директория для БД: ${dbDir}`);
-  } catch (error) {
-    console.error(`❌ Ошибка создания директории ${dbDir}:`, error);
-  }
-}
-
-console.log(`📊 Путь к базе данных: ${dbPath}`);
 
 class Database {
   constructor() {
     this.db = new sqlite3.Database(dbPath, (err) => {
       if (err) {
-        console.error('❌ Ошибка подключения к БД:', err);
+        console.error('Ошибка подключения к БД:', err);
       } else {
         console.log('✅ База данных подключена');
-        
-        // Проверяем размер файла БД
-        if (fs.existsSync(dbPath)) {
-          const stats = fs.statSync(dbPath);
-          console.log(`📊 Размер БД: ${(stats.size / 1024).toFixed(2)} KB`);
-          console.log(`📅 Последнее изменение: ${stats.mtime.toLocaleString('ru-RU')}`);
-        }
-        
         this.init();
       }
     });
@@ -287,18 +264,18 @@ class Database {
     return new Promise((resolve, reject) => {
       const query = `
         SELECT 
-          COALESCE(c.name, u.name) as client_name,
-          u.telegram_id,
-          COALESCE(c.phone, u.phone) as phone,
+          c.name as client_name,
+          c.telegram_id,
+          c.phone,
           COUNT(o.id) as orders_count,
           MAX(o.created_at) as last_order_date,
           MIN(o.created_at) as first_order_date
-        FROM users u
-        LEFT JOIN clients c ON u.telegram_id = c.telegram_id AND c.is_active = 1
-        LEFT JOIN orders o ON u.id = o.user_id
-        WHERE u.telegram_id IS NOT NULL
-        GROUP BY u.telegram_id, COALESCE(c.name, u.name), COALESCE(c.phone, u.phone)
-        HAVING COUNT(o.id) > 0
+        FROM clients c
+        LEFT JOIN orders o ON c.telegram_id = (
+          SELECT u.telegram_id FROM users u WHERE u.id = o.user_id
+        )
+        WHERE c.is_active = 1
+        GROUP BY c.telegram_id, c.name, c.phone
         ORDER BY orders_count DESC, last_order_date DESC
       `;
       
@@ -320,12 +297,13 @@ class Database {
           o.comment,
           o.status,
           o.created_at,
-          COALESCE(c.name, u.name) as client_name,
-          u.telegram_id,
-          COALESCE(c.phone, u.phone) as phone
+          c.name as client_name,
+          c.telegram_id,
+          c.phone
         FROM orders o
         JOIN users u ON o.user_id = u.id
-        LEFT JOIN clients c ON u.telegram_id = c.telegram_id AND c.is_active = 1
+        JOIN clients c ON u.telegram_id = c.telegram_id
+        WHERE c.is_active = 1
         ORDER BY o.created_at DESC
         LIMIT ?
       `;
@@ -413,45 +391,20 @@ class Database {
   approveClient(telegramId, name, phone, approvedBy) {
     return new Promise((resolve, reject) => {
       this.db.serialize(() => {
-        // Сначала проверяем, существует ли уже клиент
-        this.db.get(
-          'SELECT * FROM clients WHERE telegram_id = ?',
-          [telegramId],
-          (err, existingClient) => {
+        this.db.run(
+          'INSERT OR IGNORE INTO clients (telegram_id, name, phone, added_by) VALUES (?, ?, ?, ?)',
+          [telegramId, name, phone, approvedBy],
+          (err) => {
             if (err) return reject(err);
             
-            if (existingClient) {
-              // Клиент уже существует - обновляем статус запроса и возвращаем false
-              console.log(`⚠️ Клиент ${telegramId} уже существует в базе`);
-              this.db.run(
-                'UPDATE registration_requests SET status = "approved" WHERE telegram_id = ?',
-                [telegramId],
-                (err) => {
-                  if (err) return reject(err);
-                  resolve(false); // Возвращаем false, так как клиент не был добавлен
-                }
-              );
-            } else {
-              // Клиент не существует - добавляем его
-              this.db.run(
-                'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES (?, ?, ?, ?)',
-                [telegramId, name, phone, approvedBy],
-                (err) => {
-                  if (err) return reject(err);
-                  
-                  console.log(`✅ Клиент ${telegramId} (${name}) добавлен в базу`);
-                  
-                  this.db.run(
-                    'UPDATE registration_requests SET status = "approved" WHERE telegram_id = ?',
-                    [telegramId],
-                    (err) => {
-                      if (err) return reject(err);
-                      resolve(true); // Возвращаем true, так как клиент был успешно добавлен
-                    }
-                  );
-                }
-              );
-            }
+            this.db.run(
+              'UPDATE registration_requests SET status = "approved" WHERE telegram_id = ?',
+              [telegramId],
+              (err) => {
+                if (err) return reject(err);
+                resolve(true);
+              }
+            );
           }
         );
       });
@@ -502,35 +455,12 @@ class Database {
   // Управление складами
   addWarehouse(name, whatsappGroupId = null) {
     return new Promise((resolve, reject) => {
-      // Сначала проверяем, существует ли уже такой склад
-      this.db.get(
-        'SELECT * FROM warehouses WHERE name = ? AND is_active = 1',
-        [name],
-        (err, existingWarehouse) => {
+      this.db.run(
+        'INSERT INTO warehouses (name, whatsapp_group_id) VALUES (?, ?)',
+        [name, whatsappGroupId],
+        function(err) {
           if (err) return reject(err);
-          
-          if (existingWarehouse) {
-            // Склад уже существует
-            console.log(`⚠️ Склад "${name}" уже существует (ID: ${existingWarehouse.id})`);
-            const error = new Error(`Склад "${name}" уже существует`);
-            error.code = 'WAREHOUSE_EXISTS';
-            error.existingId = existingWarehouse.id;
-            return reject(error);
-          }
-          
-          // Склад не существует - добавляем
-          this.db.run(
-            'INSERT INTO warehouses (name, whatsapp_group_id) VALUES (?, ?)',
-            [name, whatsappGroupId],
-            function(err) {
-              if (err) {
-                console.error(`❌ Ошибка добавления склада "${name}":`, err);
-                return reject(err);
-              }
-              console.log(`✅ Склад "${name}" добавлен (ID: ${this.lastID})`);
-              resolve(this.lastID);
-            }
-          );
+          resolve(this.lastID);
         }
       );
     });
@@ -593,35 +523,12 @@ class Database {
   // Управление товарами
   addProduct(name) {
     return new Promise((resolve, reject) => {
-      // Сначала проверяем, существует ли уже такой товар
-      this.db.get(
-        'SELECT * FROM products WHERE name = ? AND is_active = 1',
+      this.db.run(
+        'INSERT INTO products (name) VALUES (?)',
         [name],
-        (err, existingProduct) => {
+        function(err) {
           if (err) return reject(err);
-          
-          if (existingProduct) {
-            // Товар уже существует
-            console.log(`⚠️ Товар "${name}" уже существует (ID: ${existingProduct.id})`);
-            const error = new Error(`Товар "${name}" уже существует`);
-            error.code = 'PRODUCT_EXISTS';
-            error.existingId = existingProduct.id;
-            return reject(error);
-          }
-          
-          // Товар не существует - добавляем
-          this.db.run(
-            'INSERT INTO products (name) VALUES (?)',
-            [name],
-            function(err) {
-              if (err) {
-                console.error(`❌ Ошибка добавления товара "${name}":`, err);
-                return reject(err);
-              }
-              console.log(`✅ Товар "${name}" добавлен (ID: ${this.lastID})`);
-              resolve(this.lastID);
-            }
-          );
+          resolve(this.lastID);
         }
       );
     });

@@ -1,4 +1,4 @@
-const database = require('./database-wrapper');
+const database = require('./database');
 const excelExporter = require('./excel-export');
 const dataManager = require('./data-manager');
 
@@ -99,175 +99,6 @@ function setupAdminCommands(bot) {
     } catch (error) {
       console.error('❌ Ошибка обновления данных:', error);
       ctx.reply(`❌ Ошибка обновления данных: ${error.message}`);
-    }
-  });
-  
-  // 🔍 Команда для проверки базы данных
-  bot.command('checkdb', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    try {
-      const usePostgres = process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('postgres');
-      
-      let message = '🔍 Информация о базе данных:\n\n';
-      
-      if (usePostgres) {
-        message += '🐘 Используется PostgreSQL\n';
-        message += '✅ Подключение активно\n\n';
-      } else {
-        const fs = require('fs');
-        const dbPath = process.env.DB_PATH || './orders.db';
-        
-        message += '📊 Используется SQLite\n';
-        message += `📁 Путь: ${dbPath}\n`;
-        
-        if (fs.existsSync(dbPath)) {
-          const stats = fs.statSync(dbPath);
-          message += `✅ Файл существует\n`;
-          message += `📊 Размер: ${(stats.size / 1024).toFixed(2)} KB\n`;
-          message += `📅 Изменен: ${stats.mtime.toLocaleString('ru-RU')}\n\n`;
-        } else {
-          message += `❌ Файл не существует\n\n`;
-        }
-      }
-      
-      const clients = await database.getAllClients();
-      const warehouses = await database.getAllWarehouses();
-      const products = await database.getAllProducts();
-      
-      message += `👥 Клиентов: ${clients.length}\n`;
-      message += `🏬 Складов: ${warehouses.length}\n`;
-      message += `🛒 Товаров: ${products.length}\n\n`;
-      
-      if (usePostgres) {
-        message += `💡 PostgreSQL автоматически сохраняет данные между деплоями`;
-      } else {
-        message += `💡 Используйте /downloaddb для скачивания резервной копии`;
-      }
-      
-      ctx.reply(message);
-      
-    } catch (error) {
-      console.error('❌ Ошибка проверки БД:', error);
-      ctx.reply(`❌ Ошибка: ${error.message}`);
-    }
-  });
-  
-  // 💾 Команда для скачивания базы данных
-  bot.command('downloaddb', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    try {
-      const dbPath = process.env.DB_PATH || './orders.db';
-      const fs = require('fs');
-      
-      if (!fs.existsSync(dbPath)) {
-        return ctx.reply('❌ Файл базы данных не найден');
-      }
-      
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-      const filename = `backup-${timestamp}.db`;
-      
-      await ctx.replyWithDocument(
-        { source: dbPath, filename: filename },
-        { 
-          caption: '💾 Резервная копия базы данных\n\n' +
-                  '⚠️ Сохраните этот файл в безопасном месте!\n' +
-                  'Используйте /uploaddb для восстановления.'
-        }
-      );
-      
-      console.log(`✅ Администратор ${userId} скачал резервную копию БД`);
-      
-    } catch (error) {
-      console.error('❌ Ошибка скачивания БД:', error);
-      ctx.reply('❌ Ошибка при скачивании базы данных');
-    }
-  });
-  
-  // 📤 Команда для загрузки базы данных
-  bot.command('uploaddb', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    ctx.reply(
-      '📤 Отправьте файл базы данных (.db)\n\n' +
-      '⚠️ ВНИМАНИЕ: Это заменит текущую базу данных!\n' +
-      'Убедитесь, что вы скачали резервную копию (/downloaddb)'
-    );
-  });
-  
-  // Обработчик загрузки файла базы данных
-  bot.on('document', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return;
-    }
-    
-    const document = ctx.message.document;
-    
-    if (!document.file_name.endsWith('.db')) {
-      return; // Игнорируем файлы, которые не .db
-    }
-    
-    try {
-      ctx.reply('⏳ Загрузка базы данных...');
-      
-      const file = await ctx.telegram.getFile(document.file_id);
-      const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
-      
-      // Скачиваем файл
-      const https = require('https');
-      const fs = require('fs');
-      const dbPath = process.env.DB_PATH || './orders.db';
-      
-      // Создаем резервную копию текущей БД
-      if (fs.existsSync(dbPath)) {
-        const backupPath = dbPath + '.backup';
-        fs.copyFileSync(dbPath, backupPath);
-        console.log(`✅ Создана резервная копия: ${backupPath}`);
-      }
-      
-      // Скачиваем новый файл
-      await new Promise((resolve, reject) => {
-        https.get(fileUrl, (response) => {
-          const fileStream = fs.createWriteStream(dbPath);
-          response.pipe(fileStream);
-          
-          fileStream.on('finish', () => {
-            fileStream.close();
-            resolve();
-          });
-          
-          fileStream.on('error', reject);
-        }).on('error', reject);
-      });
-      
-      ctx.reply(
-        '✅ База данных успешно загружена!\n\n' +
-        '⚠️ Перезапустите бота для применения изменений:\n' +
-        '1. Остановите бота (Ctrl+C)\n' +
-        '2. Запустите снова (node bot.js)\n\n' +
-        'Или сделайте redeploy на Railway.'
-      );
-      
-      console.log(`✅ Администратор ${userId} загрузил новую БД`);
-      
-    } catch (error) {
-      console.error('❌ Ошибка загрузки БД:', error);
-      ctx.reply('❌ Ошибка при загрузке базы данных');
     }
   });
   
@@ -510,23 +341,8 @@ function setupAdminCommands(bot) {
         return ctx.editMessageText('❌ Запрос уже обработан или не найден');
       }
       
-      // 🔍 Проверяем, не существует ли уже такой клиент
-      const existingClient = await database.getClient(clientId);
-      if (existingClient) {
-        await ctx.answerCbQuery('⚠️ Клиент уже существует');
-        return ctx.editMessageText(
-          `⚠️ Клиент уже существует в базе!\n\n` +
-          `👤 Имя: ${existingClient.name || 'Не указано'}\n` +
-          `📞 Телефон: ${existingClient.phone || 'Не указан'}\n` +
-          `🆔 ID: ${clientId}\n\n` +
-          `Запрос был обработан ранее.`
-        );
-      }
-      
       // Одобряем клиента с пустым телефоном - клиент заполнит при первой заявке
       await database.approveClient(clientId, request.name, '', userId);
-      
-      console.log(`✅ Клиент ${clientId} (${request.name}) одобрен администратором ${userId}`);
       
       await ctx.answerCbQuery('✅ Клиент одобрен!');
       await ctx.editMessageText(
@@ -875,82 +691,6 @@ function setupAdminCommands(bot) {
     );
   });
   
-  // 🔍 Команда проверки складов
-  bot.command('checkwarehouses', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    console.log(`🔍 Команда /checkwarehouses от пользователя ${userId}`);
-    
-    if (!isAdmin(userId)) {
-      console.log(`❌ Пользователь ${userId} не является администратором`);
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    try {
-      console.log(`📋 Получение списка складов из БД...`);
-      
-      const warehouses = await database.getAllWarehouses();
-      
-      console.log(`✅ Найдено складов: ${warehouses.length}`);
-      
-      if (warehouses.length === 0) {
-        return ctx.reply(
-          '📋 Список складов пуст\n\n' +
-          '💡 Добавьте склад командой:\n' +
-          '/addwarehouse2 Название_склада'
-        );
-      }
-      
-      let message = `📋 Список всех складов (${warehouses.length}):\n\n`;
-      
-      warehouses.forEach((w, index) => {
-        const whatsappStatus = w.whatsapp_group_id ? 
-          `✅ WhatsApp: ${w.whatsapp_group_id}` : 
-          '❌ WhatsApp не настроен';
-        
-        message += `${index + 1}. ${w.name}\n`;
-        message += `   🆔 ID: ${w.id}\n`;
-        message += `   📱 ${whatsappStatus}\n`;
-        message += `   📅 Создан: ${new Date(w.created_at).toLocaleDateString('ru-RU')}\n\n`;
-      });
-      
-      message += '💡 Команды управления:\n';
-      message += '➕ Добавить: /addwarehouse2 Название\n';
-      message += '📱 Настроить WhatsApp: /setwhatsapp Название | ID_группы\n';
-      message += '🗑️ Удалить: /removewarehouse ID';
-      
-      // Разбиваем длинное сообщение на части если нужно
-      if (message.length > 4000) {
-        const parts = [];
-        let currentPart = '';
-        const lines = message.split('\n');
-        
-        for (const line of lines) {
-          if (currentPart.length + line.length > 3800) {
-            parts.push(currentPart);
-            currentPart = line + '\n';
-          } else {
-            currentPart += line + '\n';
-          }
-        }
-        
-        if (currentPart.trim()) {
-          parts.push(currentPart);
-        }
-        
-        for (const part of parts) {
-          await ctx.reply(part);
-        }
-      } else {
-        ctx.reply(message);
-      }
-      
-    } catch (error) {
-      console.error('❌ Ошибка получения списка складов:', error);
-      ctx.reply(`❌ Ошибка при получении списка складов:\n\n${error.message}`);
-    }
-  });
-  
   // 🔧 Улучшенная команда добавления склада с проверкой дубликатов
   bot.command('addwarehouse2', async (ctx) => {
     const userId = ctx.from.id;
@@ -971,13 +711,38 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      // Добавляем склад (функция сама проверит дубликаты)
+      console.log(`🔍 Проверка существующих складов...`);
+      
+      // Сначала проверяем, существует ли уже такой склад
+      const existingWarehouses = await database.getAllWarehouses();
+      const existingWarehouse = existingWarehouses.find(w => 
+        w.name.toLowerCase() === name.toLowerCase()
+      );
+      
+      if (existingWarehouse) {
+        console.log(`⚠️ Склад "${name}" уже существует с ID: ${existingWarehouse.id}`);
+        
+        const whatsappStatus = existingWarehouse.whatsapp_group_id ? 
+          `✅ настроен (${existingWarehouse.whatsapp_group_id})` : 
+          '❌ не настроен';
+        
+        return ctx.reply(
+          `⚠️ Склад "${name}" уже существует!\n\n` +
+          `🆔 ID: ${existingWarehouse.id}\n` +
+          `📱 WhatsApp: ${whatsappStatus}\n` +
+          `📅 Создан: ${new Date(existingWarehouse.created_at).toLocaleDateString('ru-RU')}\n\n` +
+          `💡 Для настройки WhatsApp группы используйте:\n` +
+          `/setwhatsapp ${name} | ID_группы\n\n` +
+          `📋 Посмотреть все склады: /checkwarehouses`
+        );
+      }
+      
+      console.log(`➕ Склад "${name}" не существует, добавляем...`);
+      
+      // Добавляем новый склад
       const warehouseId = await database.addWarehouse(name, null);
       
       console.log(`✅ Склад "${name}" добавлен с ID: ${warehouseId}`);
-      
-      // Обновляем данные в памяти
-      await dataManager.loadWarehousesAndProducts();
       
       ctx.reply(
         `✅ Склад "${name}" успешно добавлен!\n\n` +
@@ -990,30 +755,6 @@ function setupAdminCommands(bot) {
       
     } catch (error) {
       console.error('❌ Ошибка добавления склада:', error);
-      
-      if (error.code === 'WAREHOUSE_EXISTS') {
-        // Склад уже существует - получаем информацию о нём
-        const existingWarehouses = await database.getAllWarehouses();
-        const existingWarehouse = existingWarehouses.find(w => 
-          w.name.toLowerCase() === name.toLowerCase()
-        );
-        
-        if (existingWarehouse) {
-          const whatsappStatus = existingWarehouse.whatsapp_group_id ? 
-            `✅ настроен (${existingWarehouse.whatsapp_group_id})` : 
-            '❌ не настроен';
-          
-          return ctx.reply(
-            `⚠️ Склад "${name}" уже существует!\n\n` +
-            `🆔 ID: ${existingWarehouse.id}\n` +
-            `📱 WhatsApp: ${whatsappStatus}\n` +
-            `📅 Создан: ${new Date(existingWarehouse.created_at).toLocaleDateString('ru-RU')}\n\n` +
-            `💡 Для настройки WhatsApp группы используйте:\n` +
-            `/setwhatsapp ${name} | ID_группы\n\n` +
-            `📋 Посмотреть все склады: /checkwarehouses`
-          );
-        }
-      }
       
       if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint')) {
         ctx.reply(
@@ -1318,46 +1059,15 @@ function setupAdminCommands(bot) {
     const name = ctx.message.text.replace('/addproduct', '').trim();
     
     if (!name) {
-      return ctx.reply('❌ Укажите название товара\n\nПример: /addproduct Гравий');
+      return ctx.reply('❌ Укажите название товара');
     }
     
     try {
-      // Добавляем товар (функция сама проверит дубликаты)
-      const productId = await database.addProduct(name);
-      
-      console.log(`✅ Товар "${name}" добавлен с ID: ${productId}`);
-      
-      // Обновляем данные в памяти
-      await dataManager.loadWarehousesAndProducts();
-      
-      ctx.reply(
-        `✅ Товар "${name}" успешно добавлен!\n\n` +
-        `🆔 ID: ${productId}\n\n` +
-        `💡 Теперь товар доступен при создании заявок`
-      );
+      await dataManager.addProductAndReload(name);
+      ctx.reply(`✅ Товар "${name}" добавлен и данные обновлены!`);
     } catch (error) {
       console.error('Ошибка добавления товара:', error);
-      
-      if (error.code === 'PRODUCT_EXISTS') {
-        ctx.reply(
-          `⚠️ Товар "${name}" уже существует!\n\n` +
-          `📋 Посмотрите список товаров:\n` +
-          `📋 Список товаров (в админ-панели)\n\n` +
-          `💡 Попробуйте другое название или используйте существующий товар.`
-        );
-      } else if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint')) {
-        ctx.reply(
-          `❌ Товар с названием "${name}" уже существует!\n\n` +
-          `📋 Посмотрите список товаров в админ-панели\n\n` +
-          `💡 Попробуйте другое название или используйте существующий товар.`
-        );
-      } else {
-        ctx.reply(
-          `❌ Ошибка при добавлении товара:\n\n` +
-          `${error.message}\n\n` +
-          `Попробуйте другое название или обратитесь к разработчику.`
-        );
-      }
+      ctx.reply('❌ Ошибка при добавлении товара');
     }
   });
   
