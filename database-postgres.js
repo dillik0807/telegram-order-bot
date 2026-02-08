@@ -185,13 +185,32 @@ class DatabasePostgres {
 
   async addClient(telegramId, name, phone, addedBy) {
     try {
+      // Проверяем, существует ли уже клиент
+      const existingResult = await this.pool.query(
+        'SELECT * FROM clients WHERE telegram_id = $1',
+        [telegramId]
+      );
+      
+      if (existingResult.rows.length > 0) {
+        console.log(`⚠️ Клиент ${telegramId} уже существует в базе`);
+        // Обновляем данные существующего клиента
+        await this.pool.query(
+          'UPDATE clients SET name = $1, phone = $2, is_active = 1 WHERE telegram_id = $3',
+          [name || '', phone || '', telegramId]
+        );
+        console.log(`✅ Данные клиента ${telegramId} обновлены`);
+        return existingResult.rows[0].id;
+      }
+      
       const result = await this.pool.query(
         'INSERT INTO clients (telegram_id, name, phone, added_by) VALUES ($1, $2, $3, $4) RETURNING id',
         [telegramId, name || '', phone || '', addedBy]
       );
       
+      console.log(`✅ Клиент ${telegramId} добавлен в базу`);
       return result.rows[0].id;
     } catch (error) {
+      console.error(`❌ Ошибка добавления клиента ${telegramId}:`, error.message);
       throw error;
     }
   }
