@@ -956,61 +956,93 @@ bot.command('cancel', (ctx) => {
 bot.command('editorder', async (ctx) => {
   const userId = ctx.from.id;
   
-  // Проверка прав
-  const isAdminUser = admin.isAdmin(userId);
-  const isClientUser = await database.isClient(userId);
+  console.log(`🔍 Команда /editorder от пользователя ${userId}`);
   
-  if (!isAdminUser && !isClientUser) {
-    return ctx.reply('❌ У вас нет доступа к боту');
-  }
-  
-  // Получаем ID заявки из команды
-  const args = ctx.message.text.split(' ');
-  if (args.length < 2) {
-    return ctx.reply('❌ Укажите ID заявки\n\nПример: /editorder 123');
-  }
-  
-  const orderId = parseInt(args[1]);
-  if (isNaN(orderId)) {
-    return ctx.reply('❌ Неверный ID заявки');
-  }
-  
-  // Проверяем, что заявка существует
-  const order = await database.getOrderWithItems(orderId);
-  if (!order) {
-    return ctx.reply('❌ Заявка не найдена');
-  }
-  
-  // Если клиент - проверяем, что это его заявка
-  if (!isAdminUser) {
-    const orders = await database.getRecentOrdersWithClients(1000);
-    const orderInfo = orders.find(o => o.id === orderId);
-    if (!orderInfo || orderInfo.telegram_id !== userId) {
-      return ctx.reply('❌ Вы можете редактировать только свои заявки');
+  try {
+    // Проверка прав
+    const isAdminUser = admin.isAdmin(userId);
+    const isClientUser = await database.isClient(userId);
+    
+    console.log(`   isAdmin: ${isAdminUser}, isClient: ${isClientUser}`);
+    
+    if (!isAdminUser && !isClientUser) {
+      console.log(`   ❌ Нет доступа`);
+      return ctx.reply('❌ У вас нет доступа к боту');
     }
+    
+    // Получаем ID заявки из команды
+    const args = ctx.message.text.split(' ');
+    if (args.length < 2) {
+      console.log(`   ❌ ID не указан`);
+      return ctx.reply('❌ Укажите ID заявки\n\nПример: /editorder 123');
+    }
+    
+    const orderId = parseInt(args[1]);
+    if (isNaN(orderId)) {
+      console.log(`   ❌ Неверный ID: ${args[1]}`);
+      return ctx.reply('❌ Неверный ID заявки');
+    }
+    
+    console.log(`   📋 Получение заявки #${orderId}...`);
+    
+    // Проверяем, что заявка существует
+    const order = await database.getOrderWithItems(orderId);
+    if (!order) {
+      console.log(`   ❌ Заявка #${orderId} не найдена`);
+      return ctx.reply('❌ Заявка не найдена');
+    }
+    
+    console.log(`   ✅ Заявка найдена: ${order.warehouse}`);
+    
+    // Если клиент - проверяем, что это его заявка
+    if (!isAdminUser) {
+      console.log(`   🔍 Проверка владельца заявки...`);
+      const orders = await database.getRecentOrdersWithClients(1000);
+      const orderInfo = orders.find(o => o.id === orderId);
+      if (!orderInfo || orderInfo.telegram_id !== userId) {
+        console.log(`   ❌ Не владелец заявки`);
+        return ctx.reply('❌ Вы можете редактировать только свои заявки');
+      }
+      console.log(`   ✅ Владелец подтвержден`);
+    }
+    
+    // Запускаем редактирование
+    console.log(`   🔧 Загрузка OrderEditManager...`);
+    const OrderEditManager = require('./order-edit-manager');
+    const editManager = new OrderEditManager(bot);
+    
+    console.log(`   ✅ OrderEditManager загружен, запуск редактирования...`);
+    await editManager.startEdit(ctx, orderId);
+    console.log(`   ✅ Редактирование запущено`);
+    
+  } catch (error) {
+    console.error(`   ❌ Ошибка в /editorder:`, error);
+    console.error(`   Stack:`, error.stack);
+    ctx.reply('❌ Произошла ошибка при загрузке заявки. Попробуйте позже.');
   }
-  
-  // Запускаем редактирование
-  const OrderEditManager = require('./order-edit-manager');
-  const editManager = new OrderEditManager(bot);
-  await editManager.startEdit(ctx, orderId);
 });
 
 // Команда /myorders - мои заявки
 bot.command('myorders', async (ctx) => {
   const userId = ctx.from.id;
   
-  const isAdminUser = admin.isAdmin(userId);
-  const isClientUser = await database.isClient(userId);
-  
-  if (!isAdminUser && !isClientUser) {
-    return ctx.reply('❌ У вас нет доступа к боту');
-  }
+  console.log(`🔍 Команда /myorders от пользователя ${userId}`);
   
   try {
+    const isAdminUser = admin.isAdmin(userId);
+    const isClientUser = await database.isClient(userId);
+    
+    if (!isAdminUser && !isClientUser) {
+      console.log(`   ❌ Нет доступа`);
+      return ctx.reply('❌ У вас нет доступа к боту');
+    }
+    
     // Получаем заявки пользователя
+    console.log(`   📋 Получение заявок...`);
     const allOrders = await database.getRecentOrdersWithClients(1000);
     const userOrders = allOrders.filter(o => o.telegram_id === userId);
+    
+    console.log(`   ✅ Найдено заявок: ${userOrders.length}`);
     
     if (userOrders.length === 0) {
       return ctx.reply('📋 У вас пока нет заявок');
@@ -1031,9 +1063,11 @@ bot.command('myorders', async (ctx) => {
     }
     
     ctx.reply(message);
+    console.log(`   ✅ Список отправлен`);
     
   } catch (error) {
-    console.error('Ошибка получения заявок:', error);
+    console.error(`   ❌ Ошибка в /myorders:`, error);
+    console.error(`   Stack:`, error.stack);
     ctx.reply('❌ Ошибка при загрузке заявок');
   }
 });
