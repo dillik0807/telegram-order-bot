@@ -1041,6 +1041,8 @@ bot.command('myorders', async (ctx) => {
 // Duplicate handler removed - edit handling is integrated in the main bot.on('text') handler above
 
 // Запуск бота
+async function startBot() {
+  try {
     await bot.launch();
     console.log('🤖 Бот запущен успешно!');
     const botInfo = await bot.telegram.getMe();
