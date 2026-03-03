@@ -471,6 +471,65 @@ function setupAdminCommands(bot) {
     }
   });
 
+  // Обработка выбора клиента в процессе создания заявки (новый callback)
+  bot.action(/selectclient_(\d+)/, async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.answerCbQuery('❌ У вас нет прав администратора');
+    }
+    
+    const clientId = parseInt(ctx.match[1]);
+    
+    try {
+      const client = await database.getClient(clientId);
+      
+      if (!client) {
+        await ctx.answerCbQuery('❌ Клиент не найден');
+        return;
+      }
+      
+      // Получаем orderData из bot.js
+      const botModule = require('./bot');
+      const orderData = botModule.orderData;
+      
+      // Получаем текущие данные заявки
+      const data = orderData.get(userId);
+      
+      if (!data) {
+        await ctx.answerCbQuery('❌ Данные заявки не найдены');
+        return ctx.reply('❌ Ошибка: данные заявки потеряны. Начните заново с /start');
+      }
+      
+      // Сохраняем выбранного клиента
+      data.selectedClientId = clientId;
+      data.name = client.name;
+      data.phone = client.phone;
+      data.step = 'transport';
+      orderData.set(userId, data);
+      
+      await ctx.answerCbQuery(`✅ Выбран: ${client.name}`);
+      await ctx.editMessageText(
+        `✅ Клиент выбран:\n\n` +
+        `👤 Имя: ${client.name}\n` +
+        `📞 Телефон: ${client.phone}\n\n` +
+        `🏬 Склад: ${data.warehouse}\n\n` +
+        `Товары:\n` +
+        data.items.map((item, i) => `${i + 1}. ${item.product} — ${item.quantity}`).join('\n')
+      );
+      
+      // Запрашиваем транспорт
+      ctx.reply(
+        '🚚 Введите номер транспорта:\n(например: 1234 AB)',
+        { reply_markup: { remove_keyboard: true } }
+      );
+      
+    } catch (error) {
+      console.error('Ошибка выбора клиента:', error);
+      await ctx.answerCbQuery('❌ Ошибка при выборе клиента');
+    }
+  });
+
   // Обработка отмены создания заявки
   bot.action('cancel_order', async (ctx) => {
     const userId = ctx.from.id;
