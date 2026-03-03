@@ -912,19 +912,29 @@ bot.on('callback_query', async (ctx) => {
   try {
     // Обработка выбора клиента
     if (callbackData.startsWith('select_client_')) {
-      const clientTelegramId = parseInt(callbackData.replace('select_client_', ''));
+      const clientTelegramId = callbackData.replace('select_client_', '');
       const data = orderData.get(userId);
       
+      console.log('🔍 Поиск клиента с telegram_id:', clientTelegramId);
+      
       if (!data || data.step !== 'select_client' || !data.clientsList) {
+        console.log('❌ Данные заявки не найдены');
         return ctx.answerCbQuery('❌ Ошибка: данные заявки не найдены');
       }
       
-      // Ищем выбранного клиента в списке
-      const selectedClient = data.clientsList.find(client => client.telegram_id === clientTelegramId);
+      console.log('📋 Список клиентов:', data.clientsList.map(c => ({ id: c.telegram_id, name: c.name })));
+      
+      // Ищем выбранного клиента в списке (сравниваем как строки)
+      const selectedClient = data.clientsList.find(client => 
+        String(client.telegram_id) === String(clientTelegramId)
+      );
       
       if (!selectedClient) {
+        console.log('❌ Клиент не найден в списке');
         return ctx.answerCbQuery('❌ Клиент не найден');
       }
+      
+      console.log('✅ Клиент найден:', selectedClient.name);
       
       // Сохраняем данные выбранного клиента
       data.selectedClient = selectedClient;
