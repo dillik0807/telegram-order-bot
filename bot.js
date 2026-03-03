@@ -440,36 +440,6 @@ bot.on('text', async (ctx) => {
   const data = orderData.get(userId) || { items: [], step: 'name' };
 
   try {
-    // Обработка выбора клиента (только для администраторов)
-    if (data.step === 'select_client' && data.clientsList && isAdminUser) {
-      // Ищем выбранного клиента в списке
-      const selectedClient = data.clientsList.find(client => {
-        const clientText = `${client.name || 'Без имени'} (${client.phone || 'Без телефона'})`;
-        return clientText === text;
-      });
-      
-      if (selectedClient) {
-        // Сохраняем данные выбранного клиента
-        data.selectedClient = selectedClient;
-        data.name = selectedClient.name;
-        data.phone = selectedClient.phone;
-        data.step = 'transport';
-        orderData.set(userId, data);
-        
-        let summary = '📋 Ваша заявка:\n\n';
-        summary += `👤 Клиент: ${selectedClient.name}\n`;
-        summary += `📞 Телефон: ${selectedClient.phone}\n`;
-        summary += `🏬 Склад: ${data.warehouse}\n\n`;
-        summary += 'Товары:\n';
-        data.items.forEach((item, i) => {
-          summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-        });
-        summary += '\n🚚 Введите номер транспорта:\n(например: 1234 AB)';
-        
-        return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-      }
-    }
-    
     // Обработка редактирования профиля
     if (data.editingProfile === 'name') {
       const newName = text.trim();
@@ -612,9 +582,10 @@ bot.on('text', async (ctx) => {
               return ctx.reply('❌ В системе нет зарегистрированных клиентов.\nСначала добавьте клиентов через панель администратора.');
             }
             
-            // Создаем клавиатуру с клиентами
-            const keyboard = clients.map(client => [{
-              text: `${client.name || 'Без имени'} (${client.phone || 'Без телефона'})`
+            // Создаем inline-клавиатуру с клиентами
+            const inlineKeyboard = clients.map(client => [{
+              text: `${client.name || 'Без имени'} (${client.phone || 'Без телефона'})`,
+              callback_data: `select_client_${client.telegram_id}`
             }]);
             
             // Сохраняем список клиентов для последующего использования
@@ -631,7 +602,7 @@ bot.on('text', async (ctx) => {
             summary += '\n👤 Выберите клиента из списка:';
             
             return ctx.reply(summary, {
-              reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true }
+              reply_markup: { inline_keyboard: inlineKeyboard }
             });
           } catch (error) {
             console.error('Ошибка получения списка клиентов:', error);
@@ -923,6 +894,68 @@ bot.on('text', async (ctx) => {
     console.error('Ошибка обработки:', error);
     ctx.reply('❌ Произошла ошибка. Попробуйте снова /start');
     orderData.delete(userId);
+  }
+});
+
+// Обработка inline-кнопок (callback_query)
+bot.on('callback_query', async (ctx) => {
+  const userId = ctx.from.id;
+  const callbackData = ctx.callbackQuery.data;
+  
+  // Проверка прав доступа
+  const isAdminUser = admin.isAdmin(userId);
+  
+  if (!isAdminUser) {
+    return ctx.answerCbQuery('❌ У вас нет прав для этого действия');
+  }
+  
+  try {
+    // Обработка выбора клиента
+    if (callbackData.startsWith('select_client_')) {
+      const clientTelegramId = parseInt(callbackData.replace('select_client_', ''));
+      const data = orderData.get(userId);
+      
+      if (!data || data.step !== 'select_client' || !data.clientsList) {
+        return ctx.answerCbQuery('❌ Ошибка: данные заявки не найдены');
+      }
+      
+      // Ищем выбранного клиента в списке
+      const selectedClient = data.clientsList.find(client => client.telegram_id === clientTelegramId);
+      
+      if (!selectedClient) {
+        return ctx.answerCbQuery('❌ Клиент не найден');
+      }
+      
+      // Сохраняем данные выбранного клиента
+      data.selectedClient = selectedClient;
+      data.name = selectedClient.name;
+      data.phone = selectedClient.phone;
+      data.step = 'transport';
+      orderData.set(userId, data);
+      
+      // Отвечаем на callback
+      await ctx.answerCbQuery(`✅ Выбран клиент: ${selectedClient.name}`);
+      
+      // Редактируем сообщение, убирая кнопки
+      let summary = '📋 Ваша заявка:\n\n';
+      summary += `👤 Клиент: ${selectedClient.name}\n`;
+      summary += `📞 Телефон: ${selectedClient.phone}\n`;
+      summary += `🏬 Склад: ${data.warehouse}\n\n`;
+      summary += 'Товары:\n';
+      data.items.forEach((item, i) => {
+        summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
+      });
+      
+      await ctx.editMessageText(summary);
+      
+      // Отправляем новое сообщение с запросом номера транспорта
+      await ctx.reply('🚚 Введите номер транспорта:\n(например: 1234 AB)', {
+        reply_markup: { remove_keyboard: true }
+      });
+    }
+  } catch (error) {
+    console.error('Ошибка обработки callback:', error);
+    ctx.answerCbQuery('❌ Произошла ошибка');
   }
 });
 
