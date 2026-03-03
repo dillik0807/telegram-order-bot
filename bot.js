@@ -440,6 +440,64 @@ bot.on('text', async (ctx) => {
   const data = orderData.get(userId) || { items: [], step: 'name' };
 
   try {
+    // Обработка поиска клиента (только для администраторов)
+    if (data.step === 'search_client' && isAdminUser) {
+      const searchQuery = text.trim().toLowerCase();
+      
+      if (searchQuery.length < 2) {
+        return ctx.reply('⚠️ Введите минимум 2 символа для поиска');
+      }
+      
+      try {
+        const allClients = await database.getAllClients();
+        
+        if (allClients.length === 0) {
+          return ctx.reply('❌ В системе нет зарегистрированных клиентов.\nСначала добавьте клиентов через панель администратора.');
+        }
+        
+        // Фильтруем клиентов по поисковому запросу
+        const foundClients = allClients.filter(client => {
+          const clientName = (client.name || '').toLowerCase();
+          const clientPhone = (client.phone || '').toLowerCase();
+          return clientName.includes(searchQuery) || clientPhone.includes(searchQuery);
+        });
+        
+        if (foundClients.length === 0) {
+          return ctx.reply(
+            `❌ Клиенты не найдены по запросу: "${text}"\n\n` +
+            'Попробуйте ввести другое имя или часть имени:'
+          );
+        }
+        
+        // Ограничиваем количество результатов до 10
+        const limitedClients = foundClients.slice(0, 10);
+        
+        // Создаем inline-клавиатуру с найденными клиентами
+        const inlineKeyboard = limitedClients.map(client => [{
+          text: `${client.name || 'Без имени'} (${client.phone || 'Без телефона'})`,
+          callback_data: `select_client_${client.telegram_id}`
+        }]);
+        
+        // Сохраняем список найденных клиентов
+        data.step = 'select_client';
+        data.clientsList = limitedClients;
+        orderData.set(userId, data);
+        
+        let message = `🔍 Найдено клиентов: ${foundClients.length}`;
+        if (foundClients.length > 10) {
+          message += ` (показаны первые 10)`;
+        }
+        message += '\n\n👤 Выберите клиента:';
+        
+        return ctx.reply(message, {
+          reply_markup: { inline_keyboard: inlineKeyboard }
+        });
+      } catch (error) {
+        console.error('Ошибка поиска клиентов:', error);
+        return ctx.reply('❌ Ошибка при поиске клиентов');
+      }
+    }
+    
     // Обработка редактирования профиля
     if (data.editingProfile === 'name') {
       const newName = text.trim();
@@ -573,41 +631,21 @@ bot.on('text', async (ctx) => {
       }
       
       if (text === '✅ Продолжить') {
-        // Для администратора показываем список клиентов
+        // Для администратора запрашиваем поиск клиента
         if (isAdminUser) {
-          try {
-            const clients = await database.getAllClients();
-            
-            if (clients.length === 0) {
-              return ctx.reply('❌ В системе нет зарегистрированных клиентов.\nСначала добавьте клиентов через панель администратора.');
-            }
-            
-            // Создаем inline-клавиатуру с клиентами
-            const inlineKeyboard = clients.map(client => [{
-              text: `${client.name || 'Без имени'} (${client.phone || 'Без телефона'})`,
-              callback_data: `select_client_${client.telegram_id}`
-            }]);
-            
-            // Сохраняем список клиентов для последующего использования
-            data.step = 'select_client';
-            data.clientsList = clients;
-            orderData.set(userId, data);
-            
-            let summary = '📋 Ваша заявка:\n\n';
-            summary += `🏬 Склад: ${data.warehouse}\n\n`;
-            summary += 'Товары:\n';
-            data.items.forEach((item, i) => {
-              summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-            });
-            summary += '\n👤 Выберите клиента из списка:';
-            
-            return ctx.reply(summary, {
-              reply_markup: { inline_keyboard: inlineKeyboard }
-            });
-          } catch (error) {
-            console.error('Ошибка получения списка клиентов:', error);
-            return ctx.reply('❌ Ошибка при загрузке списка клиентов');
-          }
+          data.step = 'search_client';
+          orderData.set(userId, data);
+          
+          let summary = '📋 Ваша заявка:\n\n';
+          summary += `🏬 Склад: ${data.warehouse}\n\n`;
+          summary += 'Товары:\n';
+          data.items.forEach((item, i) => {
+            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
+          });
+          summary += '\n🔍 Введите имя клиента или часть имени для поиска:\n';
+          summary += '(например: Иван или Ива)';
+          
+          return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
         }
         
         // Для обычного клиента - проверяем сохраненные данные
