@@ -334,39 +334,20 @@ bot.hears('📦 Создать заявку', async (ctx) => {
     return;
   }
   
-  // Получаем список всех активных клиентов
-  try {
-    const clients = await database.getAllClients();
-    const activeClients = clients.filter(c => c.is_active === 1);
-    
-    if (activeClients.length === 0) {
-      return ctx.reply(
-        '❌ Нет зарегистрированных клиентов.\n\n' +
-        'Сначала добавьте клиентов через:\n' +
-        '👨‍💼 Панель администратора → 👥 Управление клиентами'
-      );
-    }
-    
-    // Начинаем процесс создания заявки с выбора клиента
-    orderData.set(userId, { items: [], step: 'select_client' });
-    
-    // Создаем кнопки с клиентами (показываем имя и телефон)
-    const keyboard = activeClients.map(client => [{
-      text: `${client.name} (${client.phone || 'нет телефона'})`
-    }]);
-    
-    // Добавляем кнопку отмены
-    keyboard.push([{ text: '❌ Отмена' }]);
-    
-    ctx.reply(
-      '📦 Создание новой заявки\n\n' +
-      '👤 Выберите клиента из списка:',
-      { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-    );
-  } catch (error) {
-    console.error('Ошибка получения списка клиентов:', error);
-    ctx.reply('❌ Ошибка при загрузке списка клиентов');
-  }
+  // Начинаем процесс создания заявки
+  orderData.set(userId, { items: [], step: 'warehouse' });
+  
+  // 🔄 Всегда загружаем свежие данные складов из БД
+  console.log('🔄 Обновление списка складов из БД...');
+  await reloadWarehousesAndProducts();
+  
+  const keyboard = getWarehouses().map(w => [{ text: w }]);
+  
+  ctx.reply(
+    '📦 Создание новой заявки\n\n' +
+    '🏬 Выберите склад:',
+    { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+  );
 });
 
 // Обработка кнопки "🏬 Склад" - начало создания заявки
@@ -542,6 +523,43 @@ bot.on('text', async (ctx) => {
       }
     }
     
+    // Шаг выбора клиента при заполнении заявки (для администратора)
+    if (data.step === 'select_client_for_order' && isAdminUser) {
+      // Если нажата кнопка "Ввести вручную"
+      if (text === '✏️ Ввести вручную') {
+        data.step = 'name';
+        orderData.set(userId, data);
+        return ctx.reply('📝 Введите имя клиента:', { reply_markup: { remove_keyboard: true } });
+      }
+      
+      // Получаем список клиентов
+      const clients = await database.getAllClients();
+      const activeClients = clients.filter(c => c.is_active === 1);
+      
+      // Ищем выбранного клиента по тексту кнопки
+      const selectedClient = activeClients.find(c => 
+        text.includes(c.name) && (c.phone ? text.includes(c.phone) : true)
+      );
+      
+      if (selectedClient) {
+        // Сохраняем данные выбранного клиента
+        data.selectedClientId = selectedClient.telegram_id;
+        data.name = selectedClient.name;
+        data.phone = selectedClient.phone || '';
+        data.step = 'transport';
+        orderData.set(userId, data);
+        
+        console.log(`✅ Администратор ${userId} выбрал клиента: ${selectedClient.name} (${selectedClient.telegram_id})`);
+        
+        return ctx.reply(
+          `✅ Клиент: ${selectedClient.name}\n` +
+          `📞 Телефон: ${selectedClient.phone || 'не указан'}\n\n` +
+          '🚚 Введите номер транспорта:\n(например: 1234 AB)',
+          { reply_markup: { remove_keyboard: true } }
+        );
+      }
+    }
+    
     // Шаг 1: Выбор склада
     if (data.step === 'warehouse' && getWarehouses().includes(text)) {
       data.warehouse = text;
@@ -626,49 +644,102 @@ bot.on('text', async (ctx) => {
       }
       
       if (text === '✅ Продолжить') {
-        // Проверяем, есть ли сохраненные данные клиента
-        const client = await database.getClient(userId);
-        
-        if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
-          // Данные уже есть и заполнены - сразу запрашиваем транспорт
-          data.name = client.name;
-          data.phone = client.phone;
-          data.step = 'transport';
-          orderData.set(userId, data);
-          
-          let summary = '📋 Ваша заявка:\n\n';
-          summary += `👤 Имя: ${client.name}\n`;
-          summary += `📞 Телефон: ${client.phone}\n`;
-          summary += `🏬 Склад: ${data.warehouse}\n\n`;
-          summary += 'Товары:\n';
-          data.items.forEach((item, i) => {
-            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-          });
-          summary += '\n🚚 Введите номер транспорта:\n(например: 1234 AB)';
-          
-          return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-        } else {
-          // Данные не заполнены или клиент новый - запрашиваем имя и телефон
-          data.step = 'name';
-          orderData.set(userId, data);
-          
-          let summary = '📋 Ваша заявка:\n\n';
-          summary += `🏬 Склад: ${data.warehouse}\n\n`;
-          summary += 'Товары:\n';
-          data.items.forEach((item, i) => {
-            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-          });
-          
-          if (client && client.name && client.name.trim() !== '') {
-            summary += '\n📝 Обновите ваши контактные данные:\n\n';
-            summary += `Ваше текущее имя: ${client.name}\n`;
-            summary += 'Введите новое имя или отправьте "-" чтобы оставить текущее:';
-          } else {
-            summary += '\n📝 Заполните контактные данные:\n\n';
-            summary += 'Введите ваше имя:';
+        // Для администратора - показываем список клиентов для выбора
+        if (isAdminUser) {
+          try {
+            const clients = await database.getAllClients();
+            const activeClients = clients.filter(c => c.is_active === 1);
+            
+            if (activeClients.length === 0) {
+              // Если нет клиентов - переходим к ручному вводу
+              data.step = 'name';
+              orderData.set(userId, data);
+              
+              let summary = '📋 Ваша заявка:\n\n';
+              summary += `🏬 Склад: ${data.warehouse}\n\n`;
+              summary += 'Товары:\n';
+              data.items.forEach((item, i) => {
+                summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
+              });
+              summary += '\n📝 Введите имя клиента:';
+              
+              return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
+            }
+            
+            // Показываем список клиентов для выбора
+            data.step = 'select_client_for_order';
+            orderData.set(userId, data);
+            
+            const keyboard = activeClients.map(client => [{
+              text: `${client.name} (${client.phone || 'нет телефона'})`
+            }]);
+            
+            // Добавляем кнопку для ручного ввода
+            keyboard.push([{ text: '✏️ Ввести вручную' }]);
+            
+            let summary = '📋 Ваша заявка:\n\n';
+            summary += `🏬 Склад: ${data.warehouse}\n\n`;
+            summary += 'Товары:\n';
+            data.items.forEach((item, i) => {
+              summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
+            });
+            summary += '\n👤 Выберите клиента из списка или введите вручную:';
+            
+            return ctx.reply(summary, { 
+              reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } 
+            });
+          } catch (error) {
+            console.error('Ошибка загрузки клиентов:', error);
+            // При ошибке переходим к ручному вводу
+            data.step = 'name';
+            orderData.set(userId, data);
+            return ctx.reply('📝 Введите имя клиента:');
           }
+        } else {
+          // Для обычного клиента - проверяем сохраненные данные
+          const client = await database.getClient(userId);
           
-          return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
+          if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
+            // Данные уже есть и заполнены - сразу запрашиваем транспорт
+            data.name = client.name;
+            data.phone = client.phone;
+            data.step = 'transport';
+            orderData.set(userId, data);
+            
+            let summary = '📋 Ваша заявка:\n\n';
+            summary += `👤 Имя: ${client.name}\n`;
+            summary += `📞 Телефон: ${client.phone}\n`;
+            summary += `🏬 Склад: ${data.warehouse}\n\n`;
+            summary += 'Товары:\n';
+            data.items.forEach((item, i) => {
+              summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
+            });
+            summary += '\n🚚 Введите номер транспорта:\n(например: 1234 AB)';
+            
+            return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
+          } else {
+            // Данные не заполнены или клиент новый - запрашиваем имя и телефон
+            data.step = 'name';
+            orderData.set(userId, data);
+            
+            let summary = '📋 Ваша заявка:\n\n';
+            summary += `🏬 Склад: ${data.warehouse}\n\n`;
+            summary += 'Товары:\n';
+            data.items.forEach((item, i) => {
+              summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
+            });
+            
+            if (client && client.name && client.name.trim() !== '') {
+              summary += '\n📝 Обновите ваши контактные данные:\n\n';
+              summary += `Ваше текущее имя: ${client.name}\n`;
+              summary += 'Введите новое имя или отправьте "-" чтобы оставить текущее:';
+            } else {
+              summary += '\n📝 Заполните контактные данные:\n\n';
+              summary += 'Введите ваше имя:';
+            }
+            
+            return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
+          }
         }
       }
     }
