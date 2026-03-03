@@ -570,99 +570,33 @@ bot.on('text', async (ctx) => {
           );
         }
         
-        // Найдено несколько клиентов - показываем список для выбора
+        // Найдено несколько клиентов - показываем inline кнопки для выбора
         data.step = 'select_from_search';
         data.searchResults = foundClients;
         orderData.set(userId, data);
         
-        const keyboard = foundClients.map((client, index) => [{
-          text: `${index + 1}. ${client.name} (${client.phone || 'нет телефона'})`
+        const { Markup } = require('telegraf');
+        const inlineKeyboard = foundClients.map((client, index) => [{
+          text: `${client.name} (${client.phone || 'нет телефона'})`,
+          callback_data: `select_client_${index}`
         }]);
-        keyboard.push([{ text: '🔍 Новый поиск' }]);
+        inlineKeyboard.push([{ 
+          text: '🔍 Новый поиск', 
+          callback_data: 'new_search' 
+        }]);
+        inlineKeyboard.push([{ 
+          text: '✏️ Ручной ввод', 
+          callback_data: 'manual_input' 
+        }]);
         
         return ctx.reply(
           `🔍 Найдено клиентов: ${foundClients.length}\n\n` +
           'Выберите нужного:',
-          { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+          Markup.inlineKeyboard(inlineKeyboard)
         );
       } catch (error) {
         console.error('Ошибка поиска клиентов:', error);
         return ctx.reply('❌ Ошибка при поиске. Попробуйте еще раз:');
-      }
-    }
-    
-    // Шаг выбора из результатов поиска
-    if (data.step === 'select_from_search' && isAdminUser) {
-      // Если нажата кнопка "Новый поиск"
-      if (text === '🔍 Новый поиск') {
-        data.step = 'search_client';
-        orderData.set(userId, data);
-        return ctx.reply('🔍 Введите имя клиента для поиска:', { reply_markup: { remove_keyboard: true } });
-      }
-      
-      // Извлекаем номер из текста кнопки (например: "1. Иван Иванов")
-      const match = text.match(/^(\d+)\./);
-      if (match) {
-        const index = parseInt(match[1]) - 1;
-        const searchResults = data.searchResults || [];
-        
-        if (index >= 0 && index < searchResults.length) {
-          const client = searchResults[index];
-          data.selectedClientId = client.telegram_id;
-          data.name = client.name;
-          data.phone = client.phone || '';
-          data.step = 'transport';
-          delete data.searchResults;
-          orderData.set(userId, data);
-          
-          console.log(`✅ Администратор ${userId} выбрал клиента: ${client.name} (${client.telegram_id})`);
-          
-          return ctx.reply(
-            `✅ Клиент: ${client.name}\n` +
-            `📞 Телефон: ${client.phone || 'не указан'}\n\n` +
-            '🚚 Введите номер транспорта:\n(например: 1234 AB)',
-            { reply_markup: { remove_keyboard: true } }
-          );
-        }
-      }
-      
-      return ctx.reply('❌ Неверный выбор. Выберите клиента из списка:');
-    }
-    
-    // Шаг выбора клиента при заполнении заявки (для администратора)
-    if (data.step === 'select_client_for_order' && isAdminUser) {
-      // Если нажата кнопка "Ввести вручную"
-      if (text === '✏️ Ввести вручную') {
-        data.step = 'name';
-        orderData.set(userId, data);
-        return ctx.reply('📝 Введите имя клиента:', { reply_markup: { remove_keyboard: true } });
-      }
-      
-      // Получаем список клиентов
-      const clients = await database.getAllClients();
-      const activeClients = clients.filter(c => c.is_active === 1);
-      
-      // Ищем выбранного клиента по тексту кнопки
-      const selectedClient = activeClients.find(c => 
-        text.includes(c.name) && (c.phone ? text.includes(c.phone) : true)
-      );
-      
-      if (selectedClient) {
-        // Сохраняем данные выбранного клиента
-        data.selectedClientId = selectedClient.telegram_id;
-        data.name = selectedClient.name;
-        data.phone = selectedClient.phone || '';
-        data.step = 'transport';
-        orderData.set(userId, data);
-        
-        console.log(`✅ Администратор ${userId} выбрал клиента: ${selectedClient.name} (${selectedClient.telegram_id})`);
-        
-        return ctx.reply(
-          `✅ Клиент: ${selectedClient.name}\n` +
-          `📞 Телефон: ${selectedClient.phone || 'не указан'}\n\n` +
-          '🚚 Введите номер транспорта:\n(например: 1234 AB)',
-          { reply_markup: { remove_keyboard: true } }
-        );
       }
     }
     
@@ -1207,6 +1141,84 @@ bot.command('cancel', (ctx) => {
   ctx.reply('❌ Заявка отменена. Для новой заявки нажмите /start', {
     reply_markup: { remove_keyboard: true }
   });
+});
+
+// Обработчики inline кнопок для выбора клиента
+bot.action(/^select_client_(\d+)$/, async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!admin.isAdmin(userId)) {
+    return ctx.answerCbQuery('⛔ Доступ запрещён!');
+  }
+  
+  const data = orderData.get(userId);
+  if (!data || data.step !== 'select_from_search') {
+    return ctx.answerCbQuery('❌ Сессия истекла. Начните заново.');
+  }
+  
+  const index = parseInt(ctx.match[1]);
+  const searchResults = data.searchResults || [];
+  
+  if (index >= 0 && index < searchResults.length) {
+    const client = searchResults[index];
+    data.selectedClientId = client.telegram_id;
+    data.name = client.name;
+    data.phone = client.phone || '';
+    data.step = 'transport';
+    delete data.searchResults;
+    orderData.set(userId, data);
+    
+    console.log(`✅ Администратор ${userId} выбрал клиента: ${client.name} (${client.telegram_id})`);
+    
+    await ctx.answerCbQuery('✅ Клиент выбран');
+    await ctx.editMessageText(
+      `✅ Клиент: ${client.name}\n` +
+      `📞 Телефон: ${client.phone || 'не указан'}`
+    );
+    
+    return ctx.reply(
+      '🚚 Введите номер транспорта:\n(например: 1234 AB)',
+      { reply_markup: { remove_keyboard: true } }
+    );
+  }
+  
+  return ctx.answerCbQuery('❌ Ошибка выбора');
+});
+
+bot.action('new_search', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!admin.isAdmin(userId)) {
+    return ctx.answerCbQuery('⛔ Доступ запрещён!');
+  }
+  
+  const data = orderData.get(userId);
+  if (data) {
+    data.step = 'search_client';
+    delete data.searchResults;
+    orderData.set(userId, data);
+  }
+  
+  await ctx.answerCbQuery('🔍 Новый поиск');
+  await ctx.editMessageText('🔍 Введите имя клиента для поиска:');
+});
+
+bot.action('manual_input', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!admin.isAdmin(userId)) {
+    return ctx.answerCbQuery('⛔ Доступ запрещён!');
+  }
+  
+  const data = orderData.get(userId);
+  if (data) {
+    data.step = 'name';
+    delete data.searchResults;
+    orderData.set(userId, data);
+  }
+  
+  await ctx.answerCbQuery('✏️ Ручной ввод');
+  await ctx.editMessageText('📝 Введите имя клиента:');
 });
 
 // Запуск бота
