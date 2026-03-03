@@ -1,6 +1,5 @@
 const database = require('./database');
 const excelExporter = require('./excel-export');
-const dataManager = require('./data-manager');
 
 // Список администраторов (Telegram ID)
 // Добавьте сюда ID администраторов
@@ -11,10 +10,7 @@ const ADMINS = [
 
 // Проверка, является ли пользователь администратором
 function isAdmin(userId) {
-  const result = ADMINS.includes(userId);
-  console.log(`🔑 Проверка администратора: ID ${userId} - ${result ? 'АДМИН' : 'НЕ АДМИН'}`);
-  console.log(`📋 Список админов: [${ADMINS.join(', ')}]`);
-  return result;
+  return ADMINS.includes(userId);
 }
 
 // Команды для администраторов
@@ -24,14 +20,12 @@ function setupAdminCommands(bot) {
   bot.command('admin', async (ctx) => {
     const userId = ctx.from.id;
     
-    console.log(`🔍 Команда /admin от пользователя ${userId}`);
-    
     if (!isAdmin(userId)) {
       return ctx.reply('❌ У вас нет прав администратора');
     }
     
     const keyboard = [
-      [{ text: '👥 Управление клиентами' }],
+      [{ text: '➕ Добавить клиента' }],
       [{ text: '📋 Список клиентов' }],
       [{ text: '✏️ Изменить данные клиента' }],
       [{ text: '🚫 Заблокировать клиента' }],
@@ -48,84 +42,9 @@ function setupAdminCommands(bot) {
       { reply_markup: { keyboard, resize_keyboard: true } }
     );
   });
-
-  // 🔄 Команда для принудительного обновления данных
-  bot.command('reloaddata', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    try {
-      console.log(`🔄 Принудительное обновление данных по запросу админа ${userId}`);
-      
-      ctx.reply('🔄 Обновление данных из базы данных...');
-      
-      // Обновляем данные
-      await dataManager.loadWarehousesAndProducts();
-      
-      // Получаем актуальные данные
-      const warehouses = await database.getAllWarehouses();
-      const products = await database.getAllProducts();
-      
-      let message = '✅ Данные успешно обновлены!\n\n';
-      message += `📦 Складов: ${warehouses.length}\n`;
-      message += `🛒 Товаров: ${products.length}\n\n`;
-      
-      message += '🏬 Склады:\n';
-      warehouses.slice(0, 10).forEach((w, index) => {
-        const whatsappStatus = w.whatsapp_group_id ? '✅' : '❌';
-        message += `${index + 1}. ${w.name} ${whatsappStatus}\n`;
-      });
-      
-      if (warehouses.length > 10) {
-        message += `... и еще ${warehouses.length - 10} складов\n`;
-      }
-      
-      message += '\n🛒 Товары:\n';
-      products.slice(0, 10).forEach((p, index) => {
-        message += `${index + 1}. ${p.name}\n`;
-      });
-      
-      if (products.length > 10) {
-        message += `... и еще ${products.length - 10} товаров\n`;
-      }
-      
-      message += '\n💡 Теперь при создании заявок будут доступны все актуальные данные!';
-      
-      ctx.reply(message);
-      
-    } catch (error) {
-      console.error('❌ Ошибка обновления данных:', error);
-      ctx.reply(`❌ Ошибка обновления данных: ${error.message}`);
-    }
-  });
   
   // Обработка команд администратора
-  bot.hears('👥 Управление клиентами', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    const keyboard = [
-      [{ text: '📋 Ожидающие запросы' }],
-      [{ text: '➕ Добавить клиента напрямую' }],
-      [{ text: '🗑️ Удалить клиента' }],
-      [{ text: '🔙 Назад в админ-панель' }]
-    ];
-    
-    ctx.reply(
-      '👥 Управление клиентами\n\n' +
-      'Выберите действие:',
-      { reply_markup: { keyboard, resize_keyboard: true } }
-    );
-  });
-  
-  // Обработка ожидающих запросов (старая функция "Добавить клиента")
-  bot.hears('📋 Ожидающие запросы', async (ctx) => {
+  bot.hears('➕ Добавить клиента', async (ctx) => {
     const userId = ctx.from.id;
     
     if (!isAdmin(userId)) {
@@ -170,159 +89,6 @@ function setupAdminCommands(bot) {
     }
   });
   
-  // Прямое добавление клиента администратором
-  bot.hears('➕ Добавить клиента напрямую', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    const keyboard = [
-      [{ text: '🔙 Назад в управление клиентами' }]
-    ];
-    
-    ctx.reply(
-      '➕ Прямое добавление клиента\n\n' +
-      'Отправьте команду:\n' +
-      '/addclient Telegram_ID | Имя | Телефон\n\n' +
-      'Пример:\n' +
-      '/addclient 123456789 | Алишер Иванов | +992901234567\n\n' +
-      '💡 Клиент будет добавлен сразу без запроса на регистрацию',
-      { reply_markup: { keyboard, resize_keyboard: true } }
-    );
-  });
-  
-  // Команда для прямого добавления клиента
-  bot.command('addclient', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    const text = ctx.message.text.replace('/addclient', '').trim();
-    const parts = text.split('|').map(p => p.trim());
-    
-    if (parts.length !== 3) {
-      return ctx.reply(
-        '❌ Неверный формат!\n\n' +
-        'Используйте:\n' +
-        '/addclient Telegram_ID | Имя | Телефон\n\n' +
-        'Пример:\n' +
-        '/addclient 123456789 | Алишер Иванов | +992901234567'
-      );
-    }
-    
-    const [telegramId, name, phone] = parts;
-    const clientId = parseInt(telegramId);
-    
-    if (isNaN(clientId)) {
-      return ctx.reply('❌ Telegram ID должен быть числом');
-    }
-    
-    try {
-      // Проверяем, не существует ли уже такой клиент
-      const existingClient = await database.getClient(clientId);
-      if (existingClient) {
-        return ctx.reply(
-          `❌ Клиент с ID ${clientId} уже существует!\n\n` +
-          `Имя: ${existingClient.name}\n` +
-          `Телефон: ${existingClient.phone}`
-        );
-      }
-      
-      // Добавляем клиента напрямую
-      await database.addClient(clientId, name, phone, userId);
-      
-      ctx.reply(
-        '✅ Клиент добавлен напрямую!\n\n' +
-        `🆔 Telegram ID: ${clientId}\n` +
-        `👤 Имя: ${name}\n` +
-        `📞 Телефон: ${phone}\n\n` +
-        '💡 Клиент может сразу создавать заявки'
-      );
-      
-      // Уведомление клиенту (если возможно)
-      try {
-        await bot.telegram.sendMessage(
-          clientId,
-          '✅ Вы были добавлены в систему администратором!\n\n' +
-          'Теперь вы можете создавать заявки.\n' +
-          'Отправьте /start для начала работы.'
-        );
-      } catch (error) {
-        console.log(`Не удалось отправить уведомление клиенту ${clientId}:`, error.message);
-      }
-      
-    } catch (error) {
-      console.error('Ошибка добавления клиента:', error);
-      ctx.reply('❌ Ошибка при добавлении клиента');
-    }
-  });
-  
-  // Удаление клиента
-  bot.hears('🗑️ Удалить клиента', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    try {
-      const clients = await database.getAllClients();
-      
-      if (clients.length === 0) {
-        return ctx.reply('📋 Список клиентов пуст');
-      }
-      
-      const keyboard = [
-        [{ text: '🔙 Назад в управление клиентами' }]
-      ];
-      
-      let message = '🗑️ Удаление клиента\n\n';
-      message += 'Выберите клиента для удаления:\n\n';
-      clients.forEach((client, index) => {
-        const name = client.name || 'Без имени';
-        const phone = client.phone || 'Без телефона';
-        message += `${index + 1}. ${name}\n`;
-        message += `   📞 ${phone}\n`;
-        message += `   🆔 ID: ${client.telegram_id}\n\n`;
-      });
-      message += 'Отправьте команду:\n';
-      message += '/removeclient Telegram_ID\n\n';
-      message += 'Пример:\n';
-      message += '/removeclient 123456789';
-      
-      ctx.reply(message, { reply_markup: { keyboard, resize_keyboard: true } });
-      
-    } catch (error) {
-      console.error('Ошибка получения списка:', error);
-      ctx.reply('❌ Ошибка при получении списка клиентов');
-    }
-  });
-  
-  // Кнопка возврата в управление клиентами
-  bot.hears('🔙 Назад в управление клиентами', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return;
-    }
-    
-    const keyboard = [
-      [{ text: '📋 Ожидающие запросы' }],
-      [{ text: '➕ Добавить клиента напрямую' }],
-      [{ text: '🗑️ Удалить клиента' }],
-      [{ text: '🔙 Назад в админ-панель' }]
-    ];
-    
-    ctx.reply(
-      '👥 Управление клиентами',
-      { reply_markup: { keyboard, resize_keyboard: true } }
-    );
-  });
-  
   // Обработка кнопок одобрения/отклонения
   bot.action(/approve_(\d+)/, async (ctx) => {
     const userId = ctx.from.id;
@@ -341,7 +107,7 @@ function setupAdminCommands(bot) {
         return ctx.editMessageText('❌ Запрос уже обработан или не найден');
       }
       
-      // Одобряем клиента с пустым телефоном - клиент заполнит при первой заявке
+      // Одобряем клиента
       await database.approveClient(clientId, request.name, '', userId);
       
       await ctx.answerCbQuery('✅ Клиент одобрен!');
@@ -349,8 +115,7 @@ function setupAdminCommands(bot) {
         `✅ Клиент одобрен!\n\n` +
         `👤 Имя: ${request.name}\n` +
         `🆔 ID: ${clientId}\n` +
-        `✅ Одобрил: ${ctx.from.first_name}\n\n` +
-        `📝 Клиент заполнит контактные данные при создании первой заявки.`
+        `✅ Одобрил: ${ctx.from.first_name}`
       );
       
       // Уведомление клиенту
@@ -359,7 +124,6 @@ function setupAdminCommands(bot) {
           clientId,
           '✅ Ваша регистрация одобрена!\n\n' +
           'Теперь вы можете создавать заявки.\n' +
-          'При создании первой заявки вам нужно будет указать ваше имя и телефон.\n\n' +
           'Отправьте /start для начала работы.'
         );
       } catch (error) {
@@ -435,13 +199,8 @@ function setupAdminCommands(bot) {
       
       let message = '📋 Список клиентов:\n\n';
       clients.forEach((client, index) => {
-        const name = client.name || 'Не указано';
-        const phone = client.phone || 'Не указан';
-        const status = (!client.name || !client.phone || client.name.trim() === '' || client.phone.trim() === '') 
-          ? ' ⚠️ (неполные данные)' : '';
-        
-        message += `${index + 1}. ${name}${status}\n`;
-        message += `   📞 ${phone}\n`;
+        message += `${index + 1}. ${client.name}\n`;
+        message += `   📞 ${client.phone}\n`;
         message += `   🆔 ID: ${client.telegram_id}\n`;
         message += `   📅 Добавлен: ${new Date(client.created_at).toLocaleDateString('ru-RU')}\n\n`;
       });
@@ -652,7 +411,6 @@ function setupAdminCommands(bot) {
     const keyboard = [
       [{ text: '➕ Добавить склад' }],
       [{ text: '📋 Список складов' }],
-      [{ text: '📱 Настроить WhatsApp группы' }],
       [{ text: '🗑️ Удалить склад' }],
       [{ text: '🔙 Назад в админ-панель' }]
     ];
@@ -672,104 +430,38 @@ function setupAdminCommands(bot) {
     }
     
     const keyboard = [
-      [{ text: '🔙 Назад в управление складами' }]
+      [{ text: '🔙 Назад в админ-панель' }]
     ];
     
     ctx.reply(
       '➕ Добавление склада\n\n' +
-      '🔧 Используйте одну из команд:\n\n' +
-      '1️⃣ Обычное добавление:\n' +
-      '/addwarehouse2 Название_склада\n\n' +
-      '2️⃣ Проверить склады:\n' +
-      '/checkwarehouses\n\n' +
-      '💡 Примеры:\n' +
-      '/addwarehouse2 Склад №5\n' +
-      '/addwarehouse2 Новый склад\n\n' +
-      '📱 После добавления можно настроить WhatsApp:\n' +
-      '/setwhatsapp Название | ID_группы',
+      'Отправьте команду:\n' +
+      '/addwarehouse Название_склада\n\n' +
+      'Пример:\n' +
+      '/addwarehouse Склад №4',
       { reply_markup: { keyboard, resize_keyboard: true } }
     );
   });
   
-  // 🔧 Улучшенная команда добавления склада с проверкой дубликатов
-  bot.command('addwarehouse2', async (ctx) => {
+  bot.command('addwarehouse', async (ctx) => {
     const userId = ctx.from.id;
     
-    console.log(`🔍 Команда /addwarehouse2 от пользователя ${userId}`);
-    
     if (!isAdmin(userId)) {
-      console.log(`❌ Пользователь ${userId} не является администратором`);
       return ctx.reply('❌ У вас нет прав администратора');
     }
     
-    const name = ctx.message.text.replace('/addwarehouse2', '').trim();
-    
-    console.log(`📝 Название склада: "${name}"`);
+    const name = ctx.message.text.replace('/addwarehouse', '').trim();
     
     if (!name) {
-      return ctx.reply('❌ Укажите название склада\n\nПример: /addwarehouse2 Новый склад');
+      return ctx.reply('❌ Укажите название склада');
     }
     
     try {
-      console.log(`🔍 Проверка существующих складов...`);
-      
-      // Сначала проверяем, существует ли уже такой склад
-      const existingWarehouses = await database.getAllWarehouses();
-      const existingWarehouse = existingWarehouses.find(w => 
-        w.name.toLowerCase() === name.toLowerCase()
-      );
-      
-      if (existingWarehouse) {
-        console.log(`⚠️ Склад "${name}" уже существует с ID: ${existingWarehouse.id}`);
-        
-        const whatsappStatus = existingWarehouse.whatsapp_group_id ? 
-          `✅ настроен (${existingWarehouse.whatsapp_group_id})` : 
-          '❌ не настроен';
-        
-        return ctx.reply(
-          `⚠️ Склад "${name}" уже существует!\n\n` +
-          `🆔 ID: ${existingWarehouse.id}\n` +
-          `📱 WhatsApp: ${whatsappStatus}\n` +
-          `📅 Создан: ${new Date(existingWarehouse.created_at).toLocaleDateString('ru-RU')}\n\n` +
-          `💡 Для настройки WhatsApp группы используйте:\n` +
-          `/setwhatsapp ${name} | ID_группы\n\n` +
-          `📋 Посмотреть все склады: /checkwarehouses`
-        );
-      }
-      
-      console.log(`➕ Склад "${name}" не существует, добавляем...`);
-      
-      // Добавляем новый склад
-      const warehouseId = await database.addWarehouse(name, null);
-      
-      console.log(`✅ Склад "${name}" добавлен с ID: ${warehouseId}`);
-      
-      ctx.reply(
-        `✅ Склад "${name}" успешно добавлен!\n\n` +
-        `🆔 ID: ${warehouseId}\n` +
-        `📱 WhatsApp: не настроен\n\n` +
-        `💡 Для настройки WhatsApp группы используйте:\n` +
-        `/setwhatsapp ${name} | ID_группы\n\n` +
-        `📋 Посмотреть все склады: /checkwarehouses`
-      );
-      
+      await database.addWarehouse(name);
+      ctx.reply(`✅ Склад "${name}" добавлен!`);
     } catch (error) {
-      console.error('❌ Ошибка добавления склада:', error);
-      
-      if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint')) {
-        ctx.reply(
-          `❌ Склад с названием "${name}" уже существует!\n\n` +
-          `📋 Посмотрите список существующих складов:\n` +
-          `/checkwarehouses\n\n` +
-          `💡 Попробуйте другое название или используйте существующий склад.`
-        );
-      } else {
-        ctx.reply(
-          `❌ Ошибка при добавлении склада:\n\n` +
-          `${error.message}\n\n` +
-          `Попробуйте другое название или обратитесь к разработчику.`
-        );
-      }
+      console.error('Ошибка добавления склада:', error);
+      ctx.reply('❌ Ошибка при добавлении склада');
     }
   });
   
@@ -789,13 +481,7 @@ function setupAdminCommands(bot) {
       
       let message = '📋 Список складов:\n\n';
       warehouses.forEach((w, index) => {
-        const whatsappStatus = w.whatsapp_group_id ? '✅ WhatsApp настроен' : '❌ WhatsApp не настроен';
         message += `${index + 1}. ${w.name} (ID: ${w.id})\n`;
-        message += `   📱 ${whatsappStatus}\n`;
-        if (w.whatsapp_group_id) {
-          message += `   🆔 Группа: ${w.whatsapp_group_id}\n`;
-        }
-        message += '\n';
       });
       
       ctx.reply(message);
@@ -803,143 +489,6 @@ function setupAdminCommands(bot) {
     } catch (error) {
       console.error('Ошибка получения списка:', error);
       ctx.reply('❌ Ошибка при получении списка складов');
-    }
-  });
-
-  // 📱 Настройка WhatsApp групп для складов
-  bot.hears('📱 Настроить WhatsApp группы', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    try {
-      const warehouses = await database.getAllWarehouses();
-      
-      if (warehouses.length === 0) {
-        return ctx.reply('📋 Сначала добавьте склады');
-      }
-      
-      const keyboard = [
-        [{ text: '🔙 Назад в управление складами' }]
-      ];
-      
-      let message = '📱 Настройка WhatsApp групп для складов\n\n';
-      message += '🎯 Умная маршрутизация заявок:\n';
-      message += 'Каждый склад может иметь свою WhatsApp группу.\n';
-      message += 'Заявки будут автоматически отправляться в нужную группу!\n\n';
-      
-      message += '📋 Текущие склады:\n\n';
-      warehouses.forEach((w, index) => {
-        const status = w.whatsapp_group_id ? '✅' : '❌';
-        message += `${index + 1}. ${status} ${w.name}\n`;
-        if (w.whatsapp_group_id) {
-          message += `   📱 Группа: ${w.whatsapp_group_id}\n`;
-        }
-        message += '\n';
-      });
-      
-      message += '⚙️ Команды управления:\n\n';
-      message += '🔗 Привязать группу к складу:\n';
-      message += '/setwhatsapp Название_склада | ID_группы\n\n';
-      message += '🗑️ Отвязать группу от склада:\n';
-      message += '/removewhatsapp Название_склада\n\n';
-      message += '💡 Примеры:\n';
-      message += '/setwhatsapp Склад №1 | 120363XXXXXXXXXX@g.us\n';
-      message += '/removewhatsapp Склад №1\n\n';
-      message += '📝 Как получить ID группы WhatsApp:\n';
-      message += '1. Добавьте бота Green-API в группу\n';
-      message += '2. Отправьте любое сообщение в группу\n';
-      message += '3. Проверьте логи бота - там будет ID группы';
-      
-      ctx.reply(message, { reply_markup: { keyboard, resize_keyboard: true } });
-      
-    } catch (error) {
-      console.error('Ошибка получения списка:', error);
-      ctx.reply('❌ Ошибка при получении списка складов');
-    }
-  });
-
-  // Команда привязки WhatsApp группы к складу
-  bot.command('setwhatsapp', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    const text = ctx.message.text.replace('/setwhatsapp', '').trim();
-    const parts = text.split('|').map(p => p.trim());
-    
-    if (parts.length !== 2) {
-      return ctx.reply(
-        '❌ Неверный формат!\n\n' +
-        'Используйте:\n' +
-        '/setwhatsapp Название_склада | ID_группы\n\n' +
-        'Пример:\n' +
-        '/setwhatsapp Склад №1 | 120363XXXXXXXXXX@g.us'
-      );
-    }
-    
-    const [warehouseName, groupId] = parts;
-    
-    try {
-      const updated = await database.updateWarehouseWhatsApp(warehouseName, groupId);
-      
-      if (updated) {
-        ctx.reply(
-          '✅ WhatsApp группа привязана к складу!\n\n' +
-          `🏬 Склад: ${warehouseName}\n` +
-          `📱 WhatsApp группа: ${groupId}\n\n` +
-          `🎯 Теперь все заявки для склада "${warehouseName}" будут автоматически отправляться в эту WhatsApp группу!`
-        );
-      } else {
-        ctx.reply(`❌ Склад "${warehouseName}" не найден`);
-      }
-      
-    } catch (error) {
-      console.error('Ошибка привязки WhatsApp группы:', error);
-      ctx.reply('❌ Ошибка при привязке WhatsApp группы');
-    }
-  });
-
-  // Команда отвязки WhatsApp группы от склада
-  bot.command('removewhatsapp', async (ctx) => {
-    const userId = ctx.from.id;
-    
-    if (!isAdmin(userId)) {
-      return ctx.reply('❌ У вас нет прав администратора');
-    }
-    
-    const warehouseName = ctx.message.text.replace('/removewhatsapp', '').trim();
-    
-    if (!warehouseName) {
-      return ctx.reply(
-        '❌ Укажите название склада!\n\n' +
-        'Используйте:\n' +
-        '/removewhatsapp Название_склада\n\n' +
-        'Пример:\n' +
-        '/removewhatsapp Склад №1'
-      );
-    }
-    
-    try {
-      const updated = await database.updateWarehouseWhatsApp(warehouseName, null);
-      
-      if (updated) {
-        ctx.reply(
-          '✅ WhatsApp группа отвязана от склада!\n\n' +
-          `🏬 Склад: ${warehouseName}\n\n` +
-          `📤 Теперь заявки для этого склада будут отправляться в общую группу WhatsApp.`
-        );
-      } else {
-        ctx.reply(`❌ Склад "${warehouseName}" не найден`);
-      }
-      
-    } catch (error) {
-      console.error('Ошибка отвязки WhatsApp группы:', error);
-      ctx.reply('❌ Ошибка при отвязке WhatsApp группы');
     }
   });
   
@@ -992,10 +541,10 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      const result = await dataManager.removeWarehouseAndReload(id);
+      const result = await database.removeWarehouse(id);
       
       if (result) {
-        ctx.reply('✅ Склад удален и данные обновлены');
+        ctx.reply('✅ Склад удален');
       } else {
         ctx.reply('❌ Склад не найден');
       }
@@ -1063,8 +612,8 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      await dataManager.addProductAndReload(name);
-      ctx.reply(`✅ Товар "${name}" добавлен и данные обновлены!`);
+      await database.addProduct(name);
+      ctx.reply(`✅ Товар "${name}" добавлен!`);
     } catch (error) {
       console.error('Ошибка добавления товара:', error);
       ctx.reply('❌ Ошибка при добавлении товара');
@@ -1147,10 +696,10 @@ function setupAdminCommands(bot) {
     }
     
     try {
-      const result = await dataManager.removeProductAndReload(id);
+      const result = await database.removeProduct(id);
       
       if (result) {
-        ctx.reply('✅ Товар удален и данные обновлены');
+        ctx.reply('✅ Товар удален');
       } else {
         ctx.reply('❌ Товар не найден');
       }
@@ -1169,7 +718,7 @@ function setupAdminCommands(bot) {
     }
     
     const keyboard = [
-      [{ text: '👥 Управление клиентами' }],
+      [{ text: '➕ Добавить клиента' }],
       [{ text: '📋 Список клиентов' }],
       [{ text: '✏️ Изменить данные клиента' }],
       [{ text: '🚫 Заблокировать клиента' }],

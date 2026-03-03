@@ -12,14 +12,11 @@ console.log('🗑️ Загрузка системы мягкого удален
 function fixDatabaseSoftDelete() {
     console.log('🗑️ Применение системы мягкого удаления к базе данных...');
     
-    // Получаем экземпляр базы данных
-    const databaseInstance = require('./database');
+    // Расширяем класс Database для поддержки мягкого удаления
+    const originalDatabase = require('./database');
     
-    // Получаем конструктор класса из экземпляра
-    const DatabaseClass = databaseInstance.constructor;
-    
-    // Добавляем методы мягкого удаления к прототипу класса
-    DatabaseClass.prototype.softDeleteOrder = function(orderId, deletedBy = 'admin') {
+    // Добавляем методы мягкого удаления
+    originalDatabase.prototype.softDeleteOrder = function(orderId, deletedBy = 'admin') {
         return new Promise((resolve, reject) => {
             const query = `
                 UPDATE orders 
@@ -42,7 +39,7 @@ function fixDatabaseSoftDelete() {
     };
     
     // Восстановление из корзины
-    DatabaseClass.prototype.restoreOrder = function(orderId, restoredBy = 'admin') {
+    originalDatabase.prototype.restoreOrder = function(orderId, restoredBy = 'admin') {
         return new Promise((resolve, reject) => {
             const query = `
                 UPDATE orders 
@@ -67,7 +64,7 @@ function fixDatabaseSoftDelete() {
     };
     
     // Получение удаленных заявок (корзина)
-    DatabaseClass.prototype.getDeletedOrders = function() {
+    originalDatabase.prototype.getDeletedOrders = function() {
         return new Promise((resolve, reject) => {
             const query = `
                 SELECT o.*, c.name as client_name, c.phone 
@@ -98,16 +95,15 @@ function fixDatabaseSoftDelete() {
 function fixStatsFunctions() {
     console.log('📊 Исправление функций статистики...');
     
-    const databaseInstance = require('./database');
-    const DatabaseClass = databaseInstance.constructor;
+    const database = require('./database');
     
     // Сохраняем оригинальные методы
-    const originalGetStats = DatabaseClass.prototype.getStats;
-    const originalGetDetailedOrderStats = DatabaseClass.prototype.getDetailedOrderStats;
-    const originalGetWarehouseStats = DatabaseClass.prototype.getWarehouseStats;
+    const originalGetStats = database.prototype.getStats;
+    const originalGetDetailedOrderStats = database.prototype.getDetailedOrderStats;
+    const originalGetWarehouseStats = database.prototype.getWarehouseStats;
     
     // Переопределяем getStats с исключением удаленных
-    DatabaseClass.prototype.getStats = function() {
+    database.prototype.getStats = function() {
         return new Promise((resolve, reject) => {
             const stats = {};
             
@@ -153,7 +149,7 @@ function fixStatsFunctions() {
     };
     
     // Переопределяем getDetailedOrderStats с исключением удаленных
-    DatabaseClass.prototype.getDetailedOrderStats = function() {
+    database.prototype.getDetailedOrderStats = function() {
         return new Promise((resolve, reject) => {
             const query = `
                 SELECT 
@@ -185,7 +181,7 @@ function fixStatsFunctions() {
     };
     
     // Переопределяем getWarehouseStats с исключением удаленных
-    DatabaseClass.prototype.getWarehouseStats = function() {
+    database.prototype.getWarehouseStats = function() {
         return new Promise((resolve, reject) => {
             const query = `
                 SELECT 
@@ -290,7 +286,7 @@ function fixExportFunctions() {
 function createSoftDeleteTables() {
     console.log('🗄️ Создание таблиц для мягкого удаления...');
     
-    const databaseInstance = require('./database');
+    const database = require('./database');
     
     // Добавляем колонки для мягкого удаления в таблицу orders
     const alterQueries = [
@@ -302,7 +298,7 @@ function createSoftDeleteTables() {
     ];
     
     alterQueries.forEach(query => {
-        databaseInstance.db.run(query, (err) => {
+        database.db.run(query, (err) => {
             if (err && !err.message.includes('duplicate column name')) {
                 console.log(`⚠️ Колонка уже существует или другая ошибка: ${err.message}`);
             }
@@ -339,13 +335,12 @@ function initializeOrderBotFixes() {
 
 // Функция проверки статуса
 global.checkOrderBotFixesStatus = function() {
-    const databaseInstance = require('./database');
-    const DatabaseClass = databaseInstance.constructor;
+    const database = require('./database');
     
     const status = {
-        softDeleteMethods: typeof DatabaseClass.prototype.softDeleteOrder === 'function',
-        restoreMethods: typeof DatabaseClass.prototype.restoreOrder === 'function',
-        trashMethods: typeof DatabaseClass.prototype.getDeletedOrders === 'function',
+        softDeleteMethods: typeof database.prototype.softDeleteOrder === 'function',
+        restoreMethods: typeof database.prototype.restoreOrder === 'function',
+        trashMethods: typeof database.prototype.getDeletedOrders === 'function',
         statsFixed: true, // Проверяем что методы переопределены
         exportFixed: true, // Проверяем что методы переопределены
         allLoaded: global.ORDER_BOT_FIXES_LOADED === true

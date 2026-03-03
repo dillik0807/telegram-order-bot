@@ -2,19 +2,6 @@
 
 Telegram-бот для приема заявок от клиентов с автоматической отправкой в WhatsApp.
 
-## 🚨 Исправление ошибки БД
-
-Если видите ошибку `SQLITE_CANTOPEN`, выполните:
-
-```bash
-npm run check-db      # Проверить тип БД
-npm run use-postgres  # Переключиться на PostgreSQL
-npm install           # Установить зависимости
-npm start             # Запустить бота
-```
-
-Подробнее: [FIX-DATABASE-ERROR.md](./FIX-DATABASE-ERROR.md)
-
 ## 🚀 Быстрый старт
 
 ### 1. Установка зависимостей
