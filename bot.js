@@ -334,20 +334,39 @@ bot.hears('📦 Создать заявку', async (ctx) => {
     return;
   }
   
-  // Начинаем процесс создания заявки
-  orderData.set(userId, { items: [], step: 'warehouse' });
-  
-  // 🔄 Всегда загружаем свежие данные складов из БД
-  console.log('🔄 Обновление списка складов из БД...');
-  await reloadWarehousesAndProducts();
-  
-  const keyboard = getWarehouses().map(w => [{ text: w }]);
-  
-  ctx.reply(
-    '📦 Создание новой заявки\n\n' +
-    '🏬 Выберите склад:',
-    { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-  );
+  // Получаем список всех активных клиентов
+  try {
+    const clients = await database.getAllClients();
+    const activeClients = clients.filter(c => c.is_active === 1);
+    
+    if (activeClients.length === 0) {
+      return ctx.reply(
+        '❌ Нет зарегистрированных клиентов.\n\n' +
+        'Сначала добавьте клиентов через:\n' +
+        '👨‍💼 Панель администратора → 👥 Управление клиентами'
+      );
+    }
+    
+    // Начинаем процесс создания заявки с выбора клиента
+    orderData.set(userId, { items: [], step: 'select_client' });
+    
+    // Создаем кнопки с клиентами (показываем имя и телефон)
+    const keyboard = activeClients.map(client => [{
+      text: `${client.name} (${client.phone || 'нет телефона'})`
+    }]);
+    
+    // Добавляем кнопку отмены
+    keyboard.push([{ text: '❌ Отмена' }]);
+    
+    ctx.reply(
+      '📦 Создание новой заявки\n\n' +
+      '👤 Выберите клиента из списка:',
+      { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+    );
+  } catch (error) {
+    console.error('Ошибка получения списка клиентов:', error);
+    ctx.reply('❌ Ошибка при загрузке списка клиентов');
+  }
 });
 
 // Обработка кнопки "🏬 Склад" - начало создания заявки
@@ -486,6 +505,40 @@ bot.on('text', async (ctx) => {
       } catch (error) {
         console.error('Ошибка обновления телефона:', error);
         return ctx.reply('❌ Ошибка при обновлении телефона');
+      }
+    }
+    
+    // Шаг 0: Выбор клиента (только для администратора)
+    if (data.step === 'select_client' && isAdminUser) {
+      // Получаем список клиентов
+      const clients = await database.getAllClients();
+      const activeClients = clients.filter(c => c.is_active === 1);
+      
+      // Ищем выбранного клиента по тексту кнопки
+      const selectedClient = activeClients.find(c => 
+        text.includes(c.name) && (c.phone ? text.includes(c.phone) : true)
+      );
+      
+      if (selectedClient) {
+        // Сохраняем данные выбранного клиента
+        data.selectedClientId = selectedClient.telegram_id;
+        data.name = selectedClient.name;
+        data.phone = selectedClient.phone || '';
+        data.step = 'warehouse';
+        orderData.set(userId, data);
+        
+        // 🔄 Загружаем свежие данные складов из БД
+        console.log('🔄 Обновление списка складов из БД...');
+        await reloadWarehousesAndProducts();
+        
+        const keyboard = getWarehouses().map(w => [{ text: w }]);
+        
+        return ctx.reply(
+          `✅ Клиент: ${selectedClient.name}\n` +
+          `📞 Телефон: ${selectedClient.phone || 'не указан'}\n\n` +
+          '🏬 Выберите склад:',
+          { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+        );
       }
     }
     
@@ -712,7 +765,16 @@ bot.on('text', async (ctx) => {
       
       // Сохранение в БД
       try {
-        const user = await database.getOrCreateUser(userId, data.name, data.phone);
+        // Если администратор создает заявку для клиента, используем данные клиента
+        let targetUserId = userId;
+        
+        if (isAdminUser && data.selectedClientId) {
+          // Используем telegram_id выбранного клиента
+          targetUserId = data.selectedClientId;
+          console.log(`📝 Администратор ${userId} создает заявку для клиента ${targetUserId}`);
+        }
+        
+        const user = await database.getOrCreateUser(targetUserId, data.name, data.phone);
         const orderId = await database.createOrder(
           user.id,
           data.warehouse,
