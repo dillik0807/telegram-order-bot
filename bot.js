@@ -334,20 +334,34 @@ bot.hears('📦 Создать заявку', async (ctx) => {
     return;
   }
   
-  // Начинаем процесс создания заявки
-  orderData.set(userId, { items: [], step: 'warehouse' });
+  // Начинаем процесс создания заявки - сначала выбор клиента
+  orderData.set(userId, { items: [], step: 'select_client' });
   
-  // 🔄 Всегда загружаем свежие данные складов из БД
-  console.log('🔄 Обновление списка складов из БД...');
-  await reloadWarehousesAndProducts();
-  
-  const keyboard = getWarehouses().map(w => [{ text: w }]);
-  
-  ctx.reply(
-    '📦 Создание новой заявки\n\n' +
-    '🏬 Выберите склад:',
-    { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-  );
+  // Получаем список всех клиентов
+  try {
+    const clients = await database.getAllClients();
+    
+    if (clients.length === 0) {
+      return ctx.reply('❌ В системе нет зарегистрированных клиентов.\nСначала добавьте клиентов через панель администратора.');
+    }
+    
+    // Создаем клавиатуру с клиентами
+    const keyboard = clients.map(client => [{
+      text: `${client.name || 'Без имени'} (${client.phone || 'Без телефона'})`
+    }]);
+    
+    // Сохраняем список клиентов для последующего использования
+    orderData.set(userId, { items: [], step: 'select_client', clientsList: clients });
+    
+    ctx.reply(
+      '📦 Создание новой заявки\n\n' +
+      '👤 Выберите клиента из списка:',
+      { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+    );
+  } catch (error) {
+    console.error('Ошибка получения списка клиентов:', error);
+    ctx.reply('❌ Ошибка при загрузке списка клиентов');
+  }
 });
 
 // Обработка кнопки "🏬 Склад" - начало создания заявки
@@ -440,6 +454,37 @@ bot.on('text', async (ctx) => {
   const data = orderData.get(userId) || { items: [], step: 'name' };
 
   try {
+    // Обработка выбора клиента (только для администраторов)
+    if (data.step === 'select_client' && data.clientsList && isAdminUser) {
+      // Ищем выбранного клиента в списке
+      const selectedClient = data.clientsList.find(client => {
+        const clientText = `${client.name || 'Без имени'} (${client.phone || 'Без телефона'})`;
+        return clientText === text;
+      });
+      
+      if (selectedClient) {
+        // Сохраняем данные выбранного клиента
+        data.selectedClient = selectedClient;
+        data.name = selectedClient.name;
+        data.phone = selectedClient.phone;
+        data.step = 'warehouse';
+        orderData.set(userId, data);
+        
+        // Загружаем склады и переходим к выбору склада
+        console.log('🔄 Обновление списка складов из БД...');
+        await reloadWarehousesAndProducts();
+        
+        const keyboard = getWarehouses().map(w => [{ text: w }]);
+        
+        return ctx.reply(
+          `✅ Клиент: ${selectedClient.name}\n` +
+          `📞 Телефон: ${selectedClient.phone}\n\n` +
+          '🏬 Выберите склад:',
+          { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+        );
+      }
+    }
+    
     // Обработка редактирования профиля
     if (data.editingProfile === 'name') {
       const newName = text.trim();
@@ -573,29 +618,7 @@ bot.on('text', async (ctx) => {
       }
       
       if (text === '✅ Продолжить') {
-        // Проверяем, является ли пользователь администратором
-        const { isAdmin } = require('./admin');
-        const isUserAdmin = isAdmin(userId);
-        
-        if (isUserAdmin) {
-          // Админ - предлагаем выбрать клиента из списка или ввести вручную
-          data.step = 'select_client_method';
-          orderData.set(userId, data);
-          
-          const keyboard = [
-            [{ text: '👥 Выбрать из списка клиентов' }],
-            [{ text: '✍️ Ввести данные вручную' }],
-            [{ text: '🔙 Отмена' }]
-          ];
-          
-          return ctx.reply(
-            '👨‍💼 Вы администратор!\n\n' +
-            'Выберите способ заполнения данных клиента:',
-            { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-          );
-        }
-        
-        // Обычный пользователь - стандартный процесс
+        // Проверяем, есть ли сохраненные данные клиента
         const client = await database.getClient(userId);
         
         if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
@@ -607,7 +630,7 @@ bot.on('text', async (ctx) => {
           
           let summary = '📋 Ваша заявка:\n\n';
           summary += `👤 Имя: ${client.name}\n`;
-          summary += `� Телефон: ${client.phone}\n`;
+          summary += `📞 Телефон: ${client.phone}\n`;
           summary += `🏬 Склад: ${data.warehouse}\n\n`;
           summary += 'Товары:\n';
           data.items.forEach((item, i) => {
@@ -639,130 +662,6 @@ bot.on('text', async (ctx) => {
           
           return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
         }
-      }
-    }
-
-    // Шаг 4.5: Выбор метода заполнения данных клиента (только для админа)
-    if (data.step === 'select_client_method') {
-      if (text === '👥 Выбрать из списка клиентов') {
-        // Показываем список клиентов
-        try {
-          const clients = await database.getAllClients();
-          
-          if (clients.length === 0) {
-            return ctx.reply(
-              '📋 Список клиентов пуст.\n\n' +
-              'Используйте ручной ввод данных.',
-              { reply_markup: { remove_keyboard: true } }
-            );
-          }
-          
-          // Фильтруем клиентов с заполненными данными
-          const validClients = clients.filter(c => 
-            c.name && c.phone && c.name.trim() !== '' && c.phone.trim() !== ''
-          );
-          
-          if (validClients.length === 0) {
-            return ctx.reply(
-              '📋 Нет клиентов с заполненными данными.\n\n' +
-              'Используйте ручной ввод данных.',
-              { reply_markup: { remove_keyboard: true } }
-            );
-          }
-          
-          data.step = 'select_client';
-          orderData.set(userId, data);
-          
-          // Создаем клавиатуру с клиентами (по 2 в ряд)
-          const keyboard = [];
-          for (let i = 0; i < validClients.length; i += 2) {
-            const row = [];
-            row.push({ text: `${validClients[i].name} (${validClients[i].phone})` });
-            if (i + 1 < validClients.length) {
-              row.push({ text: `${validClients[i + 1].name} (${validClients[i + 1].phone})` });
-            }
-            keyboard.push(row);
-          }
-          keyboard.push([{ text: '🔙 Отмена' }]);
-          
-          return ctx.reply(
-            '👥 Выберите клиента из списка:\n\n' +
-            '(Нажмите на имя клиента)',
-            { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-          );
-          
-        } catch (error) {
-          console.error('Ошибка получения списка клиентов:', error);
-          return ctx.reply('❌ Ошибка при получении списка клиентов');
-        }
-      } else if (text === '✍️ Ввести данные вручную') {
-        // Переходим к ручному вводу
-        data.step = 'name';
-        orderData.set(userId, data);
-        
-        let summary = '📋 Ваша заявка:\n\n';
-        summary += `🏬 Склад: ${data.warehouse}\n\n`;
-        summary += 'Товары:\n';
-        data.items.forEach((item, i) => {
-          summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-        });
-        summary += '\n📝 Введите имя клиента:';
-        
-        return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-      } else if (text === '🔙 Отмена') {
-        orderData.delete(userId);
-        return ctx.reply('❌ Создание заявки отменено', mainKeyboard);
-      }
-    }
-    
-    // Шаг 4.6: Выбор конкретного клиента из списка (только для админа)
-    if (data.step === 'select_client') {
-      if (text === '🔙 Отмена') {
-        orderData.delete(userId);
-        return ctx.reply('❌ Создание заявки отменено', mainKeyboard);
-      }
-      
-      // Парсим выбранного клиента из текста "Имя (Телефон)"
-      const match = text.match(/^(.+?)\s*\((.+?)\)$/);
-      if (!match) {
-        return ctx.reply('❌ Неверный формат. Выберите клиента из списка.');
-      }
-      
-      const [, selectedName, selectedPhone] = match;
-      
-      // Проверяем, существует ли такой клиент
-      try {
-        const clients = await database.getAllClients();
-        const selectedClient = clients.find(c => 
-          c.name === selectedName && c.phone === selectedPhone
-        );
-        
-        if (!selectedClient) {
-          return ctx.reply('❌ Клиент не найден. Попробуйте снова.');
-        }
-        
-        // Сохраняем данные выбранного клиента
-        data.name = selectedClient.name;
-        data.phone = selectedClient.phone;
-        data.selectedClientId = selectedClient.telegram_id; // Сохраняем ID для справки
-        data.step = 'transport';
-        orderData.set(userId, data);
-        
-        let summary = '📋 Ваша заявка:\n\n';
-        summary += `👤 Клиент: ${data.name}\n`;
-        summary += `📞 Телефон: ${data.phone}\n`;
-        summary += `🏬 Склад: ${data.warehouse}\n\n`;
-        summary += 'Товары:\n';
-        data.items.forEach((item, i) => {
-          summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-        });
-        summary += '\n🚚 Введите номер транспорта:\n(например: 1234 AB)';
-        
-        return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-        
-      } catch (error) {
-        console.error('Ошибка выбора клиента:', error);
-        return ctx.reply('❌ Ошибка при выборе клиента');
       }
     }
 
@@ -858,7 +757,9 @@ bot.on('text', async (ctx) => {
       
       // Сохранение в БД
       try {
-        const user = await database.getOrCreateUser(userId, data.name, data.phone);
+        // Если администратор создает заявку для клиента, используем telegram_id клиента
+        const clientTelegramId = data.selectedClient ? data.selectedClient.telegram_id : userId;
+        const user = await database.getOrCreateUser(clientTelegramId, data.name, data.phone);
         const orderId = await database.createOrder(
           user.id,
           data.warehouse,
