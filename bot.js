@@ -523,6 +523,112 @@ bot.on('text', async (ctx) => {
       }
     }
     
+    // Шаг поиска клиента по имени (для администратора)
+    if (data.step === 'search_client' && isAdminUser) {
+      // Если введен "-" - переходим к ручному вводу
+      if (text === '-') {
+        data.step = 'name';
+        orderData.set(userId, data);
+        return ctx.reply('📝 Введите имя клиента:', { reply_markup: { remove_keyboard: true } });
+      }
+      
+      // Ищем клиентов по введенному тексту
+      try {
+        const clients = await database.getAllClients();
+        const activeClients = clients.filter(c => c.is_active === 1);
+        
+        // Поиск по имени (регистронезависимый, частичное совпадение)
+        const searchText = text.toLowerCase().trim();
+        const foundClients = activeClients.filter(c => 
+          c.name.toLowerCase().includes(searchText)
+        );
+        
+        if (foundClients.length === 0) {
+          return ctx.reply(
+            `❌ Клиенты с именем "${text}" не найдены.\n\n` +
+            '🔍 Попробуйте другое имя или введите "-" для ручного ввода:'
+          );
+        }
+        
+        if (foundClients.length === 1) {
+          // Найден один клиент - сразу выбираем его
+          const client = foundClients[0];
+          data.selectedClientId = client.telegram_id;
+          data.name = client.name;
+          data.phone = client.phone || '';
+          data.step = 'transport';
+          orderData.set(userId, data);
+          
+          console.log(`✅ Администратор ${userId} выбрал клиента: ${client.name} (${client.telegram_id})`);
+          
+          return ctx.reply(
+            `✅ Клиент найден:\n` +
+            `👤 Имя: ${client.name}\n` +
+            `📞 Телефон: ${client.phone || 'не указан'}\n\n` +
+            '🚚 Введите номер транспорта:\n(например: 1234 AB)',
+            { reply_markup: { remove_keyboard: true } }
+          );
+        }
+        
+        // Найдено несколько клиентов - показываем список для выбора
+        data.step = 'select_from_search';
+        data.searchResults = foundClients;
+        orderData.set(userId, data);
+        
+        const keyboard = foundClients.map((client, index) => [{
+          text: `${index + 1}. ${client.name} (${client.phone || 'нет телефона'})`
+        }]);
+        keyboard.push([{ text: '🔍 Новый поиск' }]);
+        
+        return ctx.reply(
+          `🔍 Найдено клиентов: ${foundClients.length}\n\n` +
+          'Выберите нужного:',
+          { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+        );
+      } catch (error) {
+        console.error('Ошибка поиска клиентов:', error);
+        return ctx.reply('❌ Ошибка при поиске. Попробуйте еще раз:');
+      }
+    }
+    
+    // Шаг выбора из результатов поиска
+    if (data.step === 'select_from_search' && isAdminUser) {
+      // Если нажата кнопка "Новый поиск"
+      if (text === '🔍 Новый поиск') {
+        data.step = 'search_client';
+        orderData.set(userId, data);
+        return ctx.reply('🔍 Введите имя клиента для поиска:', { reply_markup: { remove_keyboard: true } });
+      }
+      
+      // Извлекаем номер из текста кнопки (например: "1. Иван Иванов")
+      const match = text.match(/^(\d+)\./);
+      if (match) {
+        const index = parseInt(match[1]) - 1;
+        const searchResults = data.searchResults || [];
+        
+        if (index >= 0 && index < searchResults.length) {
+          const client = searchResults[index];
+          data.selectedClientId = client.telegram_id;
+          data.name = client.name;
+          data.phone = client.phone || '';
+          data.step = 'transport';
+          delete data.searchResults;
+          orderData.set(userId, data);
+          
+          console.log(`✅ Администратор ${userId} выбрал клиента: ${client.name} (${client.telegram_id})`);
+          
+          return ctx.reply(
+            `✅ Клиент: ${client.name}\n` +
+            `📞 Телефон: ${client.phone || 'не указан'}\n\n` +
+            '🚚 Введите номер транспорта:\n(например: 1234 AB)',
+            { reply_markup: { remove_keyboard: true } }
+          );
+        }
+      }
+      
+      return ctx.reply('❌ Неверный выбор. Выберите клиента из списка:');
+    }
+    
     // Шаг выбора клиента при заполнении заявки (для администратора)
     if (data.step === 'select_client_for_order' && isAdminUser) {
       // Если нажата кнопка "Ввести вручную"
