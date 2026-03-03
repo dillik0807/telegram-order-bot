@@ -415,6 +415,88 @@ function setupAdminCommands(bot) {
       await ctx.answerCbQuery('❌ Ошибка при отклонении');
     }
   });
+
+  // Обработка выбора клиента для заявки (для администратора)
+  bot.action(/client_(\d+)/, async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.answerCbQuery('❌ У вас нет прав администратора');
+    }
+    
+    const clientId = parseInt(ctx.match[1]);
+    
+    try {
+      const client = await database.getClient(clientId);
+      
+      if (!client) {
+        await ctx.answerCbQuery('❌ Клиент не найден');
+        return;
+      }
+      
+      // Получаем orderData из bot.js через require
+      const botModule = require('./bot');
+      const orderData = botModule.orderData;
+      
+      // Сохраняем выбранного клиента в данные заявки
+      const data = orderData.get(userId) || { items: [] };
+      data.selectedClientId = clientId;
+      data.name = client.name;
+      data.phone = client.phone;
+      data.step = 'warehouse';
+      orderData.set(userId, data);
+      
+      await ctx.answerCbQuery(`✅ Выбран: ${client.name}`);
+      await ctx.editMessageText(
+        `✅ Клиент выбран:\n\n` +
+        `👤 Имя: ${client.name}\n` +
+        `📞 Телефон: ${client.phone}`
+      );
+      
+      // Загружаем склады и показываем выбор
+      console.log('🔄 Обновление списка складов из БД...');
+      await botModule.dataManager.loadWarehousesAndProducts();
+      
+      const warehouses = botModule.dataManager.warehouses;
+      const keyboard = warehouses.map(w => [{ text: w }]);
+      
+      ctx.reply(
+        '🏬 Выберите склад:',
+        { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
+      );
+      
+    } catch (error) {
+      console.error('Ошибка выбора клиента:', error);
+      await ctx.answerCbQuery('❌ Ошибка при выборе клиента');
+    }
+  });
+
+  // Обработка отмены создания заявки
+  bot.action('cancel_order', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.answerCbQuery('❌ У вас нет прав администратора');
+    }
+    
+    // Получаем orderData из bot.js
+    const botModule = require('./bot');
+    const orderData = botModule.orderData;
+    
+    orderData.delete(userId);
+    
+    await ctx.answerCbQuery('❌ Создание заявки отменено');
+    await ctx.editMessageText('❌ Создание заявки отменено');
+    
+    const keyboard = [
+      [{ text: '📦 Создать заявку' }],
+      [{ text: '👨‍💼 Панель администратора' }]
+    ];
+    
+    ctx.reply('Главное меню:', {
+      reply_markup: { keyboard, resize_keyboard: true }
+    });
+  });
   
   // Обработка процесса регистрации клиента - УДАЛЕНО
   // Теперь клиенты регистрируются автоматически через /start

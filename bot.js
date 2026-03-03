@@ -334,20 +334,59 @@ bot.hears('📦 Создать заявку', async (ctx) => {
     return;
   }
   
-  // Начинаем процесс создания заявки
-  orderData.set(userId, { items: [], step: 'warehouse' });
+  // Начинаем процесс создания заявки - сначала выбираем клиента
+  orderData.set(userId, { items: [], step: 'select_client' });
   
-  // 🔄 Всегда загружаем свежие данные складов из БД
-  console.log('🔄 Обновление списка складов из БД...');
-  await reloadWarehousesAndProducts();
-  
-  const keyboard = getWarehouses().map(w => [{ text: w }]);
-  
-  ctx.reply(
-    '📦 Создание новой заявки\n\n' +
-    '🏬 Выберите склад:',
-    { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-  );
+  try {
+    const clients = await database.getAllClients();
+    
+    if (clients.length === 0) {
+      return ctx.reply('❌ Нет зарегистрированных клиентов.\n\nСначала добавьте клиентов через панель администратора.');
+    }
+    
+    // Создаем inline-клавиатуру с клиентами
+    const inlineKeyboard = [];
+    
+    // Показываем первых 10 клиентов
+    const displayClients = clients.slice(0, 10);
+    
+    // Группируем по 1 кнопке в ряд для лучшей читаемости
+    displayClients.forEach(client => {
+      inlineKeyboard.push([{
+        text: `${client.name || 'Без имени'} | ${client.phone || 'нет тел.'}`,
+        callback_data: `client_${client.telegram_id}`
+      }]);
+    });
+    
+    // Если клиентов больше 10, добавляем информацию
+    if (clients.length > 10) {
+      inlineKeyboard.push([{
+        text: `📋 Показано ${displayClients.length} из ${clients.length}`,
+        callback_data: 'show_more_clients'
+      }]);
+    }
+    
+    // Добавляем кнопку отмены
+    inlineKeyboard.push([{ text: '❌ Отмена', callback_data: 'cancel_order' }]);
+    
+    let message = '📦 Создание новой заявки\n\n';
+    message += '👤 Выберите клиента:\n\n';
+    
+    if (clients.length > 10) {
+      message += '💡 Показаны первые 10 клиентов.\n';
+      message += 'Для поиска используйте: /findclient Имя\n\n';
+    }
+    
+    ctx.reply(message, {
+      reply_markup: {
+        inline_keyboard: inlineKeyboard
+      }
+    });
+    
+  } catch (error) {
+    console.error('Ошибка получения списка клиентов:', error);
+    ctx.reply('❌ Ошибка при получении списка клиентов');
+  }
 });
 
 // Обработка кнопки "🏬 Склад" - начало создания заявки
@@ -895,6 +934,69 @@ bot.command('profile', async (ctx) => {
   }
 });
 
+// Команда /findclient - поиск клиента для создания заявки (только для админа)
+bot.command('findclient', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!admin.isAdmin(userId)) {
+    return ctx.reply('❌ У вас нет прав администратора');
+  }
+  
+  const searchQuery = ctx.message.text.replace('/findclient', '').trim().toLowerCase();
+  
+  if (!searchQuery) {
+    return ctx.reply(
+      '🔍 Поиск клиента\n\n' +
+      'Используйте:\n' +
+      '/findclient Имя_клиента\n\n' +
+      'Пример:\n' +
+      '/findclient Алишер'
+    );
+  }
+  
+  try {
+    const clients = await database.getAllClients();
+    
+    // Ищем клиентов по имени или телефону
+    const foundClients = clients.filter(client => {
+      const name = (client.name || '').toLowerCase();
+      const phone = (client.phone || '').toLowerCase();
+      return name.includes(searchQuery) || phone.includes(searchQuery);
+    });
+    
+    if (foundClients.length === 0) {
+      return ctx.reply(`❌ Клиенты с запросом "${searchQuery}" не найдены`);
+    }
+    
+    // Создаем inline-клавиатуру с найденными клиентами
+    const inlineKeyboard = [];
+    
+    foundClients.forEach(client => {
+      inlineKeyboard.push([{
+        text: `${client.name || 'Без имени'} | ${client.phone || 'нет тел.'}`,
+        callback_data: `client_${client.telegram_id}`
+      }]);
+    });
+    
+    // Добавляем кнопку отмены
+    inlineKeyboard.push([{ text: '❌ Отмена', callback_data: 'cancel_order' }]);
+    
+    ctx.reply(
+      `🔍 Найдено клиентов: ${foundClients.length}\n\n` +
+      '👤 Выберите клиента:',
+      {
+        reply_markup: {
+          inline_keyboard: inlineKeyboard
+        }
+      }
+    );
+    
+  } catch (error) {
+    console.error('Ошибка поиска клиента:', error);
+    ctx.reply('❌ Ошибка при поиске клиента');
+  }
+});
+
 // Обработка изменения имени
 bot.hears('✏️ Изменить имя', async (ctx) => {
   const userId = ctx.from.id;
@@ -999,4 +1101,11 @@ process.once('SIGTERM', () => {
 });
 
 // Экспортируем функцию для использования в admin.js
-module.exports = { loadWarehousesAndProducts, dataManager };
+module.exports = { 
+  loadWarehousesAndProducts, 
+  dataManager,
+  orderData,
+  getWarehouses,
+  getProducts,
+  reloadWarehousesAndProducts
+};
