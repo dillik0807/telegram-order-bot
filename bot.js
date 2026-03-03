@@ -1,12 +1,34 @@
 require('dotenv').config();
+
+// 🔧 ИСПРАВЛЕНИЕ: Путь к базе данных для контейнера
+const fs = require('fs');
+const path = require('path');
+const dataDir = process.env.DATA_DIR || '/tmp';
+if (!fs.existsSync(dataDir)) {
+    try {
+        fs.mkdirSync(dataDir, { recursive: true });
+        console.log(`✅ Создана директория: ${dataDir}`);
+    } catch (e) {
+        console.log(`⚠️ Используем /tmp для БД`);
+    }
+}
+process.env.DB_PATH = path.join(dataDir, 'orders.db');
+console.log(`📁 База данных: ${process.env.DB_PATH}`);
+
 const { Telegraf, Scenes, session } = require('telegraf');
 const database = require('./database');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 
-// 🔧 Загружаем исправления для Order Bot
-const orderBotFixes = require('./fix-order-bot-soft-delete');
-console.log('🔧 Исправления Order Bot загружены');
+// 🔧 Загружаем исправления для Order Bot (отложенная загрузка)
+setTimeout(() => {
+    try {
+        const orderBotFixes = require('./fix-order-bot-soft-delete-v2');
+        console.log('🔧 Исправления Order Bot загружены');
+    } catch (error) {
+        console.log('⚠️ Исправления Order Bot не загружены:', error.message);
+    }
+}, 3000);
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
