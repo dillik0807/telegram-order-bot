@@ -826,22 +826,33 @@ bot.on('text', async (ctx) => {
       try {
         console.log(`🔍 Проверка маршрутизации для склада: "${data.warehouse}"`);
         
-        // Получаем WhatsApp группу для выбранного склада
-        let warehouseWhatsAppGroup = null;
+        // Получаем настройки WhatsApp для выбранного склада (группа и личный номер)
+        let warehouseWhatsAppSettings = null;
         try {
-          warehouseWhatsAppGroup = await database.getWarehouseWhatsApp(data.warehouse);
+          warehouseWhatsAppSettings = await database.getWarehouseWhatsAppSettings(data.warehouse);
         } catch (error) {
-          if (error.code === 'SQLITE_ERROR' && error.message.includes('no such column')) {
-            console.log(`⚠️ Колонка whatsapp_group_id не существует, используем общую группу`);
-          } else {
-            console.log(`⚠️ Ошибка получения WhatsApp группы: ${error.message}`);
-          }
+          console.log(`⚠️ Ошибка получения настроек WhatsApp: ${error.message}`);
         }
         
-        console.log(`📱 WhatsApp группа для склада "${data.warehouse}": ${warehouseWhatsAppGroup || 'не найдена'}`);
+        const warehouseWhatsAppGroup = warehouseWhatsAppSettings?.whatsapp_group_id;
+        const warehouseWhatsAppPhone = warehouseWhatsAppSettings?.whatsapp_phone;
         
-        if (warehouseWhatsAppGroup) {
-          // Отправляем в группу конкретного склада
+        console.log(`📱 WhatsApp группа для склада "${data.warehouse}": ${warehouseWhatsAppGroup || 'не найдена'}`);
+        console.log(`📱 WhatsApp номер для склада "${data.warehouse}": ${warehouseWhatsAppPhone || 'не указан'}`);
+        
+        // Приоритет 1: Личный номер склада
+        if (warehouseWhatsAppPhone) {
+          console.log(`📤 Отправка заявки на личный WhatsApp номер склада "${data.warehouse}": ${warehouseWhatsAppPhone}`);
+          whatsappSent = await whatsapp.sendMessage(orderMessage, warehouseWhatsAppPhone);
+          
+          if (whatsappSent) {
+            console.log(`✅ Заявка отправлена на личный WhatsApp номер склада "${data.warehouse}"`);
+          } else {
+            console.log(`❌ Ошибка отправки на личный номер склада "${data.warehouse}"`);
+          }
+        }
+        // Приоритет 2: Группа склада
+        else if (warehouseWhatsAppGroup) {
           console.log(`📤 Отправка заявки в WhatsApp группу склада "${data.warehouse}": ${warehouseWhatsAppGroup}`);
           whatsappSent = await whatsapp.sendToGroup(orderMessage, warehouseWhatsAppGroup);
           
@@ -850,24 +861,25 @@ bot.on('text', async (ctx) => {
           } else {
             console.log(`❌ Ошибка отправки в группу склада "${data.warehouse}"`);
           }
-        } else {
-          // Если у склада нет привязанной группы - отправляем в общую группу
-          console.log(`⚠️ У склада "${data.warehouse}" нет привязанной WhatsApp группы, отправляем в общую`);
+        }
+        // Приоритет 3: Общие настройки
+        else {
+          console.log(`⚠️ У склада "${data.warehouse}" нет привязанных WhatsApp настроек, используем общие`);
           
           const whatsappGroupId = process.env.WHATSAPP_GROUP_ID;
           const whatsappRecipient = process.env.WHATSAPP_RECIPIENT;
           
           console.log(`📋 Общая группа: ${whatsappGroupId || 'не настроена'}`);
-          console.log(`📋 Получатель: ${whatsappRecipient || 'не настроен'}`);
+          console.log(`📋 Общий получатель: ${whatsappRecipient || 'не настроен'}`);
           
           if (whatsappGroupId) {
             // Отправка в общую WhatsApp группу
             console.log(`📤 Отправка в общую WhatsApp группу: ${whatsappGroupId}`);
             whatsappSent = await whatsapp.sendToGroup(orderMessage, whatsappGroupId);
           } else if (whatsappRecipient) {
-            // Отправка личному получателю
-            console.log(`📤 Отправка личному получателю: ${whatsappRecipient}`);
-            whatsappSent = await whatsapp.sendMessage(orderMessage);
+            // Отправка общему личному получателю
+            console.log(`📤 Отправка общему личному получателю: ${whatsappRecipient}`);
+            whatsappSent = await whatsapp.sendMessage(orderMessage, whatsappRecipient);
           }
         }
       } catch (error) {

@@ -1,17 +1,20 @@
 const axios = require('axios');
 
 // Отправка сообщения через Green-API
-async function sendMessage(message) {
+async function sendMessage(message, recipient = null) {
   const idInstance = process.env.GREEN_API_INSTANCE_ID;
   const apiTokenInstance = process.env.GREEN_API_TOKEN;
-  const recipient = process.env.WHATSAPP_RECIPIENT;
+  const defaultRecipient = process.env.WHATSAPP_RECIPIENT;
+  
+  // Используем переданный номер или номер по умолчанию
+  const phoneNumber = recipient || defaultRecipient;
   
   if (!idInstance || !apiTokenInstance) {
     console.log('⚠️ Green-API не настроен (отсутствуют idInstance или apiToken)');
     return false;
   }
   
-  if (!recipient) {
+  if (!phoneNumber) {
     console.log('⚠️ Номер получателя WhatsApp не указан');
     return false;
   }
@@ -20,11 +23,11 @@ async function sendMessage(message) {
     const url = `https://api.green-api.com/waInstance${idInstance}/sendMessage/${apiTokenInstance}`;
     
     const data = {
-      chatId: recipient + '@c.us', // Формат для личного чата
+      chatId: phoneNumber + '@c.us', // Формат для личного чата
       message: message
     };
     
-    console.log('📤 Отправка в WhatsApp через Green-API...');
+    console.log(`📤 Отправка в WhatsApp на номер ${phoneNumber} через Green-API...`);
     
     const response = await axios.post(url, data, {
       headers: {

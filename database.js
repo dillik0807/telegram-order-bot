@@ -453,6 +453,42 @@ class Database {
     }
   }
 
+  async updateWarehouseWhatsAppPhone(warehouseName, whatsappPhone) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE warehouses SET whatsapp_phone = $1 WHERE name = $2 AND is_active = 1',
+        [whatsappPhone, warehouseName]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getWarehouseWhatsAppPhone(warehouseName) {
+    try {
+      const result = await this.pool.query(
+        'SELECT whatsapp_phone FROM warehouses WHERE name = $1 AND is_active = 1',
+        [warehouseName]
+      );
+      return result.rows[0] ? result.rows[0].whatsapp_phone : null;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getWarehouseWhatsAppSettings(warehouseName) {
+    try {
+      const result = await this.pool.query(
+        'SELECT whatsapp_group_id, whatsapp_phone FROM warehouses WHERE name = $1 AND is_active = 1',
+        [warehouseName]
+      );
+      return result.rows[0] || { whatsapp_group_id: null, whatsapp_phone: null };
+    } catch (error) {
+      throw error;
+    }
+  }
+
   async getAllWarehouses() {
     try {
       const result = await this.pool.query(

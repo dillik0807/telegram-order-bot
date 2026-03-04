@@ -789,11 +789,15 @@ function setupAdminCommands(bot) {
       
       let message = '📋 Список складов:\n\n';
       warehouses.forEach((w, index) => {
-        const whatsappStatus = w.whatsapp_group_id ? '✅ WhatsApp настроен' : '❌ WhatsApp не настроен';
+        const whatsappGroupStatus = w.whatsapp_group_id ? '✅' : '❌';
+        const whatsappPhoneStatus = w.whatsapp_phone ? '✅' : '❌';
         message += `${index + 1}. ${w.name} (ID: ${w.id})\n`;
-        message += `   📱 ${whatsappStatus}\n`;
+        message += `   📱 Группа: ${whatsappGroupStatus} | Номер: ${whatsappPhoneStatus}\n`;
         if (w.whatsapp_group_id) {
-          message += `   🆔 Группа: ${w.whatsapp_group_id}\n`;
+          message += `   └─ Группа: ${w.whatsapp_group_id}\n`;
+        }
+        if (w.whatsapp_phone) {
+          message += `   └─ Номер: +${w.whatsapp_phone}\n`;
         }
         message += '\n';
       });
@@ -901,6 +905,107 @@ function setupAdminCommands(bot) {
     } catch (error) {
       console.error('Ошибка привязки WhatsApp группы:', error);
       ctx.reply('❌ Ошибка при привязке WhatsApp группы');
+    }
+  });
+
+  // Команда привязки личного номера WhatsApp к складу
+  bot.command('setwhatsappphone', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const text = ctx.message.text.replace('/setwhatsappphone', '').trim();
+    const parts = text.split('|').map(p => p.trim());
+    
+    if (parts.length !== 2) {
+      return ctx.reply(
+        '❌ Неверный формат команды!\n\n' +
+        'Используйте:\n' +
+        '/setwhatsappphone Название_склада | Номер_телефона\n\n' +
+        'Примеры:\n' +
+        '/setwhatsappphone Склад №1 | 992900000000\n' +
+        '/setwhatsappphone Главный склад | 992901234567\n\n' +
+        '💡 Номер указывается без + и пробелов'
+      );
+    }
+    
+    const [warehouseName, phoneNumber] = parts;
+    
+    // Проверяем формат номера (только цифры)
+    if (!/^\d+$/.test(phoneNumber)) {
+      return ctx.reply(
+        '❌ Неверный формат номера!\n\n' +
+        'Номер должен содержать только цифры без + и пробелов\n\n' +
+        'Примеры правильных номеров:\n' +
+        '992900000000\n' +
+        '992901234567'
+      );
+    }
+    
+    try {
+      const updated = await database.updateWarehouseWhatsAppPhone(warehouseName, phoneNumber);
+      
+      if (updated) {
+        ctx.reply(
+          '✅ Личный номер WhatsApp привязан к складу!\n\n' +
+          `🏬 Склад: ${warehouseName}\n` +
+          `📱 WhatsApp номер: +${phoneNumber}\n\n` +
+          `🎯 Теперь все заявки для склада "${warehouseName}" будут автоматически отправляться на этот номер!\n\n` +
+          `💡 Приоритет отправки:\n` +
+          `1️⃣ Личный номер склада (текущая настройка)\n` +
+          `2️⃣ Группа склада\n` +
+          `3️⃣ Общие настройки`
+        );
+      } else {
+        ctx.reply(`❌ Склад "${warehouseName}" не найден`);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка привязки WhatsApp номера:', error);
+      ctx.reply('❌ Ошибка при привязке WhatsApp номера');
+    }
+  });
+
+  // Команда отвязки личного номера WhatsApp от склада
+  bot.command('removewhatsappphone', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const warehouseName = ctx.message.text.replace('/removewhatsappphone', '').trim();
+    
+    if (!warehouseName) {
+      return ctx.reply(
+        '❌ Укажите название склада!\n\n' +
+        'Используйте:\n' +
+        '/removewhatsappphone Название_склада\n\n' +
+        'Пример:\n' +
+        '/removewhatsappphone Склад №1'
+      );
+    }
+    
+    try {
+      const updated = await database.updateWarehouseWhatsAppPhone(warehouseName, null);
+      
+      if (updated) {
+        ctx.reply(
+          '✅ Личный номер WhatsApp отвязан от склада!\n\n' +
+          `🏬 Склад: ${warehouseName}\n\n` +
+          `📤 Теперь заявки для этого склада будут отправляться:\n` +
+          `1️⃣ В группу склада (если настроена)\n` +
+          `2️⃣ В общую группу WhatsApp`
+        );
+      } else {
+        ctx.reply(`❌ Склад "${warehouseName}" не найден`);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка отвязки WhatsApp номера:', error);
+      ctx.reply('❌ Ошибка при отвязке WhatsApp номера');
     }
   });
 
