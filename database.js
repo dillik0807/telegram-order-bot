@@ -92,6 +92,26 @@ class Database {
         )
       `);
 
+      // Добавляем колонку whatsapp_phone если её нет
+      try {
+        const checkColumn = await this.pool.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'warehouses' 
+          AND column_name = 'whatsapp_phone'
+        `);
+        
+        if (checkColumn.rows.length === 0) {
+          await this.pool.query(`
+            ALTER TABLE warehouses 
+            ADD COLUMN whatsapp_phone TEXT
+          `);
+          console.log('✅ Колонка whatsapp_phone добавлена в таблицу warehouses');
+        }
+      } catch (error) {
+        console.log('⚠️ Ошибка при добавлении колонки whatsapp_phone:', error.message);
+      }
+
       // Таблица товаров
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS products (
