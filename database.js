@@ -87,6 +87,9 @@ class Database {
           id SERIAL PRIMARY KEY,
           name TEXT NOT NULL UNIQUE,
           whatsapp_group_id TEXT,
+          whatsapp_phone TEXT,
+          green_api_instance_id TEXT,
+          green_api_token TEXT,
           is_active INTEGER DEFAULT 1,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -110,6 +113,36 @@ class Database {
         }
       } catch (error) {
         console.log('⚠️ Ошибка при добавлении колонки whatsapp_phone:', error.message);
+      }
+
+      // Добавляем колонки для Green-API если их нет
+      try {
+        const checkGreenApiColumns = await this.pool.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'warehouses' 
+          AND column_name IN ('green_api_instance_id', 'green_api_token')
+        `);
+        
+        if (checkGreenApiColumns.rows.length === 0) {
+          await this.pool.query(`
+            ALTER TABLE warehouses 
+            ADD COLUMN green_api_instance_id TEXT,
+            ADD COLUMN green_api_token TEXT
+          `);
+          console.log('✅ Колонки green_api_instance_id и green_api_token добавлены');
+        } else if (checkGreenApiColumns.rows.length === 1) {
+          // Добавляем недостающую колонку
+          const existingColumn = checkGreenApiColumns.rows[0].column_name;
+          const missingColumn = existingColumn === 'green_api_instance_id' ? 'green_api_token' : 'green_api_instance_id';
+          await this.pool.query(`
+            ALTER TABLE warehouses 
+            ADD COLUMN ${missingColumn} TEXT
+          `);
+          console.log(`✅ Колонка ${missingColumn} добавлена`);
+        }
+      } catch (error) {
+        console.log('⚠️ Ошибка при добавлении колонок Green-API:', error.message);
       }
 
       // Таблица товаров
@@ -500,10 +533,27 @@ class Database {
   async getWarehouseWhatsAppSettings(warehouseName) {
     try {
       const result = await this.pool.query(
-        'SELECT whatsapp_group_id, whatsapp_phone FROM warehouses WHERE name = $1 AND is_active = 1',
+        'SELECT whatsapp_group_id, whatsapp_phone, green_api_instance_id, green_api_token FROM warehouses WHERE name = $1 AND is_active = 1',
         [warehouseName]
       );
-      return result.rows[0] || { whatsapp_group_id: null, whatsapp_phone: null };
+      return result.rows[0] || { 
+        whatsapp_group_id: null, 
+        whatsapp_phone: null,
+        green_api_instance_id: null,
+        green_api_token: null
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async updateWarehouseGreenApi(warehouseName, instanceId, token) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE warehouses SET green_api_instance_id = $1, green_api_token = $2 WHERE name = $3 AND is_active = 1',
+        [instanceId, token, warehouseName]
+      );
+      return result.rowCount > 0;
     } catch (error) {
       throw error;
     }

@@ -1,9 +1,10 @@
 const axios = require('axios');
 
 // Отправка сообщения через Green-API
-async function sendMessage(message, recipient = null) {
-  const idInstance = process.env.GREEN_API_INSTANCE_ID;
-  const apiTokenInstance = process.env.GREEN_API_TOKEN;
+async function sendMessage(message, recipient = null, customInstanceId = null, customToken = null) {
+  // Используем кастомные настройки или настройки по умолчанию
+  const idInstance = customInstanceId || process.env.GREEN_API_INSTANCE_ID;
+  const apiTokenInstance = customToken || process.env.GREEN_API_TOKEN;
   const defaultRecipient = process.env.WHATSAPP_RECIPIENT;
   
   // Используем переданный номер или номер по умолчанию
@@ -27,7 +28,7 @@ async function sendMessage(message, recipient = null) {
       message: message
     };
     
-    console.log(`📤 Отправка в WhatsApp на номер ${phoneNumber} через Green-API...`);
+    console.log(`📤 Отправка в WhatsApp на номер ${phoneNumber} через Green-API (Instance: ${idInstance})...`);
     
     const response = await axios.post(url, data, {
       headers: {
@@ -51,9 +52,10 @@ async function sendMessage(message, recipient = null) {
 }
 
 // Отправка в WhatsApp группу через Green-API
-async function sendToGroup(message, groupId) {
-  const idInstance = process.env.GREEN_API_INSTANCE_ID;
-  const apiTokenInstance = process.env.GREEN_API_TOKEN;
+async function sendToGroup(message, groupId, customInstanceId = null, customToken = null) {
+  // Используем кастомные настройки или настройки по умолчанию
+  const idInstance = customInstanceId || process.env.GREEN_API_INSTANCE_ID;
+  const apiTokenInstance = customToken || process.env.GREEN_API_TOKEN;
   
   if (!idInstance || !apiTokenInstance) {
     console.log('⚠️ Green-API не настроен');
@@ -73,7 +75,7 @@ async function sendToGroup(message, groupId) {
       message: message
     };
     
-    console.log('📤 Отправка в WhatsApp группу через Green-API...');
+    console.log(`📤 Отправка в WhatsApp группу через Green-API (Instance: ${idInstance})...`);
     
     const response = await axios.post(url, data, {
       headers: {

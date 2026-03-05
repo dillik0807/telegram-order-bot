@@ -826,7 +826,7 @@ bot.on('text', async (ctx) => {
       try {
         console.log(`🔍 Проверка маршрутизации для склада: "${data.warehouse}"`);
         
-        // Получаем настройки WhatsApp для выбранного склада (группа и личный номер)
+        // Получаем настройки WhatsApp для выбранного склада (группа, номер и Green-API)
         let warehouseWhatsAppSettings = null;
         try {
           warehouseWhatsAppSettings = await database.getWarehouseWhatsAppSettings(data.warehouse);
@@ -836,14 +836,22 @@ bot.on('text', async (ctx) => {
         
         const warehouseWhatsAppGroup = warehouseWhatsAppSettings?.whatsapp_group_id;
         const warehouseWhatsAppPhone = warehouseWhatsAppSettings?.whatsapp_phone;
+        const warehouseGreenApiInstance = warehouseWhatsAppSettings?.green_api_instance_id;
+        const warehouseGreenApiToken = warehouseWhatsAppSettings?.green_api_token;
         
         console.log(`📱 WhatsApp группа для склада "${data.warehouse}": ${warehouseWhatsAppGroup || 'не найдена'}`);
         console.log(`📱 WhatsApp номер для склада "${data.warehouse}": ${warehouseWhatsAppPhone || 'не указан'}`);
+        console.log(`🔑 Green-API инстанс для склада "${data.warehouse}": ${warehouseGreenApiInstance || 'не настроен (используется общий)'}`);
         
         // Приоритет 1: Личный номер склада
         if (warehouseWhatsAppPhone) {
           console.log(`📤 Отправка заявки на личный WhatsApp номер склада "${data.warehouse}": ${warehouseWhatsAppPhone}`);
-          whatsappSent = await whatsapp.sendMessage(orderMessage, warehouseWhatsAppPhone);
+          whatsappSent = await whatsapp.sendMessage(
+            orderMessage, 
+            warehouseWhatsAppPhone,
+            warehouseGreenApiInstance,
+            warehouseGreenApiToken
+          );
           
           if (whatsappSent) {
             console.log(`✅ Заявка отправлена на личный WhatsApp номер склада "${data.warehouse}"`);
@@ -854,7 +862,12 @@ bot.on('text', async (ctx) => {
         // Приоритет 2: Группа склада
         else if (warehouseWhatsAppGroup) {
           console.log(`📤 Отправка заявки в WhatsApp группу склада "${data.warehouse}": ${warehouseWhatsAppGroup}`);
-          whatsappSent = await whatsapp.sendToGroup(orderMessage, warehouseWhatsAppGroup);
+          whatsappSent = await whatsapp.sendToGroup(
+            orderMessage, 
+            warehouseWhatsAppGroup,
+            warehouseGreenApiInstance,
+            warehouseGreenApiToken
+          );
           
           if (whatsappSent) {
             console.log(`✅ Заявка отправлена в WhatsApp группу склада "${data.warehouse}"`);

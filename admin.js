@@ -791,13 +791,19 @@ function setupAdminCommands(bot) {
       warehouses.forEach((w, index) => {
         const whatsappGroupStatus = w.whatsapp_group_id ? '✅' : '❌';
         const whatsappPhoneStatus = w.whatsapp_phone ? '✅' : '❌';
+        const greenApiStatus = w.green_api_instance_id ? '✅' : '❌';
+        
         message += `${index + 1}. ${w.name} (ID: ${w.id})\n`;
-        message += `   📱 Группа: ${whatsappGroupStatus} | Номер: ${whatsappPhoneStatus}\n`;
+        message += `   📱 Группа: ${whatsappGroupStatus} | Номер: ${whatsappPhoneStatus} | Green-API: ${greenApiStatus}\n`;
+        
         if (w.whatsapp_group_id) {
           message += `   └─ Группа: ${w.whatsapp_group_id}\n`;
         }
         if (w.whatsapp_phone) {
           message += `   └─ Номер: +${w.whatsapp_phone}\n`;
+        }
+        if (w.green_api_instance_id) {
+          message += `   └─ Instance: ${w.green_api_instance_id}\n`;
         }
         message += '\n';
       });
@@ -1006,6 +1012,60 @@ function setupAdminCommands(bot) {
     } catch (error) {
       console.error('Ошибка отвязки WhatsApp номера:', error);
       ctx.reply('❌ Ошибка при отвязке WhatsApp номера');
+    }
+  });
+
+  // Команда привязки Green-API инстанса к складу
+  bot.command('setgreenapi', async (ctx) => {
+    const userId = ctx.from.id;
+    
+    if (!isAdmin(userId)) {
+      return ctx.reply('❌ У вас нет прав администратора');
+    }
+    
+    const text = ctx.message.text.replace('/setgreenapi', '').trim();
+    const parts = text.split('|').map(p => p.trim());
+    
+    if (parts.length !== 3) {
+      return ctx.reply(
+        '❌ Неверный формат команды!\n\n' +
+        'Используйте:\n' +
+        '/setgreenapi Название_склада | Instance_ID | Token\n\n' +
+        'Примеры:\n' +
+        '/setgreenapi ОБЛ База | 1234567890 | abc123def456\n' +
+        '/setgreenapi ЧБалхи | 9876543210 | xyz789uvw012\n\n' +
+        '💡 Получите Instance ID и Token на https://console.green-api.com'
+      );
+    }
+    
+    const [warehouseName, instanceId, token] = parts;
+    
+    try {
+      const updated = await database.updateWarehouseGreenApi(warehouseName, instanceId, token);
+      
+      if (updated) {
+        ctx.reply(
+          '✅ Green-API инстанс привязан к складу!\n\n' +
+          `🏬 Склад: ${warehouseName}\n` +
+          `🔑 Instance ID: ${instanceId}\n` +
+          `🔐 Token: ${token.substring(0, 10)}...\n\n` +
+          `🎯 Теперь все заявки для склада "${warehouseName}" будут отправляться через этот Green-API инстанс!\n\n` +
+          `💡 Это позволяет:\n` +
+          `• Использовать отдельный аккаунт WhatsApp для склада\n` +
+          `• Обходить лимиты квоты\n` +
+          `• Отправлять на любые номера\n\n` +
+          `📝 Не забудьте настроить номер или группу:\n` +
+          `/setwhatsappphone ${warehouseName} | 992900000000\n` +
+          `или\n` +
+          `/setwhatsapp ${warehouseName} | 120363XXXXXXXXXX@g.us`
+        );
+      } else {
+        ctx.reply(`❌ Склад "${warehouseName}" не найден`);
+      }
+      
+    } catch (error) {
+      console.error('Ошибка привязки Green-API:', error);
+      ctx.reply('❌ Ошибка при привязке Green-API инстанса');
     }
   });
 
