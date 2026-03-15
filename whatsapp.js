@@ -33,7 +33,8 @@ async function sendMessage(message, recipient = null, customInstanceId = null, c
     const response = await axios.post(url, data, {
       headers: {
         'Content-Type': 'application/json'
-      }
+      },
+      timeout: 15000 // 15 секунд
     });
     
     if (response.data && response.data.idMessage) {
@@ -80,7 +81,8 @@ async function sendToGroup(message, groupId, customInstanceId = null, customToke
     const response = await axios.post(url, data, {
       headers: {
         'Content-Type': 'application/json'
-      }
+      },
+      timeout: 15000 // 15 секунд
     });
     
     if (response.data && response.data.idMessage) {

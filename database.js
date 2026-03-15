@@ -95,54 +95,56 @@ class Database {
         )
       `);
 
-      // Добавляем колонку whatsapp_phone если её нет
-      try {
-        const checkColumn = await this.pool.query(`
-          SELECT column_name 
-          FROM information_schema.columns 
-          WHERE table_name = 'warehouses' 
-          AND column_name = 'whatsapp_phone'
-        `);
-        
-        if (checkColumn.rows.length === 0) {
-          await this.pool.query(`
-            ALTER TABLE warehouses 
-            ADD COLUMN whatsapp_phone TEXT
-          `);
-          console.log('✅ Колонка whatsapp_phone добавлена в таблицу warehouses');
+      // Миграция: добавляем все недостающие колонки в warehouses и products
+      const warehouseColumns = [
+        { name: 'whatsapp_group_id', type: 'TEXT' },
+        { name: 'whatsapp_phone', type: 'TEXT' },
+        { name: 'green_api_instance_id', type: 'TEXT' },
+        { name: 'green_api_token', type: 'TEXT' },
+        { name: 'is_active', type: 'INTEGER DEFAULT 1' }
+      ];
+      
+      for (const col of warehouseColumns) {
+        try {
+          const check = await this.pool.query(`
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'warehouses' AND column_name = $1
+          `, [col.name]);
+          if (check.rows.length === 0) {
+            await this.pool.query(`ALTER TABLE warehouses ADD COLUMN ${col.name} ${col.type}`);
+            console.log(`✅ Колонка warehouses.${col.name} добавлена`);
+          }
+        } catch (e) {
+          console.log(`⚠️ Ошибка добавления warehouses.${col.name}: ${e.message}`);
         }
-      } catch (error) {
-        console.log('⚠️ Ошибка при добавлении колонки whatsapp_phone:', error.message);
       }
 
-      // Добавляем колонки для Green-API если их нет
+      // Миграция: is_active для products
       try {
-        const checkGreenApiColumns = await this.pool.query(`
-          SELECT column_name 
-          FROM information_schema.columns 
-          WHERE table_name = 'warehouses' 
-          AND column_name IN ('green_api_instance_id', 'green_api_token')
+        const check = await this.pool.query(`
+          SELECT column_name FROM information_schema.columns 
+          WHERE table_name = 'products' AND column_name = 'is_active'
         `);
-        
-        if (checkGreenApiColumns.rows.length === 0) {
-          await this.pool.query(`
-            ALTER TABLE warehouses 
-            ADD COLUMN green_api_instance_id TEXT,
-            ADD COLUMN green_api_token TEXT
-          `);
-          console.log('✅ Колонки green_api_instance_id и green_api_token добавлены');
-        } else if (checkGreenApiColumns.rows.length === 1) {
-          // Добавляем недостающую колонку
-          const existingColumn = checkGreenApiColumns.rows[0].column_name;
-          const missingColumn = existingColumn === 'green_api_instance_id' ? 'green_api_token' : 'green_api_instance_id';
-          await this.pool.query(`
-            ALTER TABLE warehouses 
-            ADD COLUMN ${missingColumn} TEXT
-          `);
-          console.log(`✅ Колонка ${missingColumn} добавлена`);
+        if (check.rows.length === 0) {
+          await this.pool.query(`ALTER TABLE products ADD COLUMN is_active INTEGER DEFAULT 1`);
+          console.log('✅ Колонка products.is_active добавлена');
         }
-      } catch (error) {
-        console.log('⚠️ Ошибка при добавлении колонок Green-API:', error.message);
+      } catch (e) {
+        console.log(`⚠️ Ошибка добавления products.is_active: ${e.message}`);
+      }
+
+      // Миграция: is_active для clients
+      try {
+        const check = await this.pool.query(`
+          SELECT column_name FROM information_schema.columns 
+          WHERE table_name = 'clients' AND column_name = 'is_active'
+        `);
+        if (check.rows.length === 0) {
+          await this.pool.query(`ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1`);
+          console.log('✅ Колонка clients.is_active добавлена');
+        }
+      } catch (e) {
+        console.log(`⚠️ Ошибка добавления clients.is_active: ${e.message}`);
       }
 
       // Таблица товаров
@@ -485,7 +487,7 @@ class Database {
   async updateWarehouseWhatsApp(warehouseName, whatsappGroupId) {
     try {
       const result = await this.pool.query(
-        'UPDATE warehouses SET whatsapp_group_id = $1 WHERE name = $2 AND is_active = 1',
+        'UPDATE warehouses SET whatsapp_group_id = $1 WHERE name = $2',
         [whatsappGroupId, warehouseName]
       );
       return result.rowCount > 0;
@@ -497,7 +499,7 @@ class Database {
   async getWarehouseWhatsApp(warehouseName) {
     try {
       const result = await this.pool.query(
-        'SELECT whatsapp_group_id FROM warehouses WHERE name = $1 AND is_active = 1',
+        'SELECT whatsapp_group_id FROM warehouses WHERE name = $1',
         [warehouseName]
       );
       return result.rows[0] ? result.rows[0].whatsapp_group_id : null;
@@ -509,7 +511,7 @@ class Database {
   async updateWarehouseWhatsAppPhone(warehouseName, whatsappPhone) {
     try {
       const result = await this.pool.query(
-        'UPDATE warehouses SET whatsapp_phone = $1 WHERE name = $2 AND is_active = 1',
+        'UPDATE warehouses SET whatsapp_phone = $1 WHERE name = $2',
         [whatsappPhone, warehouseName]
       );
       return result.rowCount > 0;
@@ -521,7 +523,7 @@ class Database {
   async getWarehouseWhatsAppPhone(warehouseName) {
     try {
       const result = await this.pool.query(
-        'SELECT whatsapp_phone FROM warehouses WHERE name = $1 AND is_active = 1',
+        'SELECT whatsapp_phone FROM warehouses WHERE name = $1',
         [warehouseName]
       );
       return result.rows[0] ? result.rows[0].whatsapp_phone : null;
@@ -533,7 +535,7 @@ class Database {
   async getWarehouseWhatsAppSettings(warehouseName) {
     try {
       const result = await this.pool.query(
-        'SELECT whatsapp_group_id, whatsapp_phone, green_api_instance_id, green_api_token FROM warehouses WHERE name = $1 AND is_active = 1',
+        'SELECT whatsapp_group_id, whatsapp_phone, green_api_instance_id, green_api_token FROM warehouses WHERE name = $1',
         [warehouseName]
       );
       return result.rows[0] || { 
@@ -550,7 +552,7 @@ class Database {
   async updateWarehouseGreenApi(warehouseName, instanceId, token) {
     try {
       const result = await this.pool.query(
-        'UPDATE warehouses SET green_api_instance_id = $1, green_api_token = $2 WHERE name = $3 AND is_active = 1',
+        'UPDATE warehouses SET green_api_instance_id = $1, green_api_token = $2 WHERE name = $3',
         [instanceId, token, warehouseName]
       );
       return result.rowCount > 0;
@@ -562,11 +564,13 @@ class Database {
   async getAllWarehouses() {
     try {
       const result = await this.pool.query(
-        'SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name'
+        'SELECT * FROM warehouses WHERE is_active = 1 OR is_active IS NULL ORDER BY name'
       );
       return result.rows;
     } catch (error) {
-      throw error;
+      // Если колонки is_active нет — вернуть все
+      const result = await this.pool.query('SELECT * FROM warehouses ORDER BY name');
+      return result.rows;
     }
   }
 
@@ -597,11 +601,13 @@ class Database {
   async getAllProducts() {
     try {
       const result = await this.pool.query(
-        'SELECT * FROM products WHERE is_active = 1 ORDER BY name'
+        'SELECT * FROM products WHERE is_active = 1 OR is_active IS NULL ORDER BY name'
       );
       return result.rows;
     } catch (error) {
-      throw error;
+      // Если колонки is_active нет — вернуть все
+      const result = await this.pool.query('SELECT * FROM products ORDER BY name');
+      return result.rows;
     }
   }
 

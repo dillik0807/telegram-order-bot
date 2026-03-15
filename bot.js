@@ -93,6 +93,17 @@ admin.setupAdminCommands(bot);
 // Временное хранилище данных заявки
 const orderData = new Map();
 
+// Очистка устаревших данных заявок (старше 2 часов)
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, data] of orderData.entries()) {
+    if (data.createdAt && (now - data.createdAt) > 2 * 60 * 60 * 1000) {
+      orderData.delete(userId);
+      console.log(`🧹 Очищены устаревшие данные заявки для пользователя ${userId}`);
+    }
+  }
+}, 30 * 60 * 1000); // Проверяем каждые 30 минут
+
 // Загрузка складов и товаров из БД через менеджер данных
 async function loadWarehousesAndProducts() {
   // 🚀 Простая миграция через существующее подключение
@@ -335,7 +346,7 @@ bot.hears('📦 Создать заявку', async (ctx) => {
   }
   
   // Начинаем процесс создания заявки
-  orderData.set(userId, { items: [], step: 'warehouse' });
+  orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
   
   // 🔄 Всегда загружаем свежие данные складов из БД
   console.log('🔄 Обновление списка складов из БД...');
@@ -362,7 +373,7 @@ bot.hears('🏬 Склад', async (ctx) => {
   }
   
   // Начинаем процесс создания заявки
-  orderData.set(userId, { items: [], step: 'warehouse' });
+  orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
   
   // 🔄 Всегда загружаем свежие данные складов из БД
   console.log('🔄 Обновление списка складов из БД...');
@@ -449,6 +460,7 @@ bot.on('text', async (ctx) => {
       }
       
       try {
+        // Всегда загружаем свежий список из БД
         const allClients = await database.getAllClients();
         
         if (allClients.length === 0) {
@@ -478,7 +490,7 @@ bot.on('text', async (ctx) => {
           callback_data: `select_client_${client.telegram_id}`
         }]);
         
-        // Сохраняем список найденных клиентов
+        // Сохраняем список найденных клиентов (свежий из БД)
         data.step = 'select_client';
         data.clientsList = limitedClients;
         orderData.set(userId, data);
@@ -1147,13 +1159,49 @@ bot.command('cancel', (ctx) => {
 // Запуск бота
 async function startBot() {
   try {
+    console.log('🚀 Запуск бота...');
+    console.log(`📋 NODE_ENV: ${process.env.NODE_ENV || 'не задан'}`);
+    console.log(`🔑 TELEGRAM_BOT_TOKEN: ${process.env.TELEGRAM_BOT_TOKEN ? '✅ задан' : '❌ НЕ ЗАДАН'}`);
+    console.log(`🗄️ DATABASE_URL: ${process.env.DATABASE_URL ? '✅ задан' : '❌ НЕ ЗАДАН'}`);
+    console.log(`📱 GREEN_API_INSTANCE_ID: ${process.env.GREEN_API_INSTANCE_ID ? '✅ задан' : '❌ не задан'}`);
+    console.log(`📱 GREEN_API_TOKEN: ${process.env.GREEN_API_TOKEN ? '✅ задан' : '❌ не задан'}`);
+    console.log(`💬 TELEGRAM_GROUP_ID: ${process.env.TELEGRAM_GROUP_ID ? '✅ задан' : '❌ не задан'}`);
+    
+    if (!process.env.TELEGRAM_BOT_TOKEN) {
+      console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_BOT_TOKEN не задан!');
+      console.error('💡 Добавьте переменную окружения TELEGRAM_BOT_TOKEN в Railway');
+      process.exit(1);
+    }
+    
     // Выполняем автоматическую миграцию перед запуском
     await autoMigrate();
     
-    await bot.launch();
-    console.log('🤖 Бот запущен успешно!');
+    const PORT = process.env.PORT || 3000;
+    const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN;
+    
+    if (WEBHOOK_DOMAIN) {
+      // Webhook режим для Railway/production
+      const domain = WEBHOOK_DOMAIN.startsWith('https://') ? WEBHOOK_DOMAIN : `https://${WEBHOOK_DOMAIN}`;
+      console.log(`🌐 Запуск в webhook режиме: ${domain}, порт: ${PORT}`);
+      
+      await bot.launch({
+        webhook: {
+          domain: domain,
+          port: PORT
+        }
+      });
+      
+      console.log('🤖 Бот запущен в webhook режиме!');
+    } else {
+      // Polling режим для локальной разработки
+      console.log('🔄 Запуск в polling режиме (локальная разработка)...');
+      await bot.launch();
+      console.log('🤖 Бот запущен в polling режиме!');
+    }
+    
     const botInfo = await bot.telegram.getMe();
     console.log('📱 Telegram: @' + botInfo.username);
+    console.log('✅ Бот готов к работе!');
   } catch (error) {
     console.error('❌ Ошибка запуска бота:', error);
     process.exit(1);
