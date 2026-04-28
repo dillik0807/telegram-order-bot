@@ -1,4 +1,4 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
 const database = require('./database');
 const whatsapp = require('./whatsapp');
@@ -93,11 +93,11 @@ admin.setupAdminCommands(bot);
 // Временное хранилище данных заявки
 const orderData = new Map();
 
-// Очистка устаревших данных заявок (старше 2 часов)
+// Очистка устаревших данных заявок (старше 6 часов)
 setInterval(() => {
   const now = Date.now();
   for (const [userId, data] of orderData.entries()) {
-    if (data.createdAt && (now - data.createdAt) > 2 * 60 * 60 * 1000) {
+    if (data.createdAt && (now - data.createdAt) > 6 * 60 * 60 * 1000) {
       orderData.delete(userId);
       console.log(`🧹 Очищены устаревшие данные заявки для пользователя ${userId}`);
     }
@@ -246,7 +246,7 @@ function formatOrder(orderInfo) {
     message += `📝 Комментарий: ${orderInfo.comment}\n`;
   }
   
-  message += `\n⏰ Время: ${new Date().toLocaleString('ru-RU')}`;
+  message += `\n📅 Дата: ${new Date().toLocaleDateString('ru-RU')} ${new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})}`;
   
   return message;
 }
@@ -263,6 +263,7 @@ bot.command('start', async (ctx) => {
   if (isAdminUser) {
     const keyboard = [
       [{ text: '📦 Создать заявку' }],
+      [{ text: '💰 Касса' }],
       [{ text: '👨‍💼 Панель администратора' }]
     ];
     
@@ -401,6 +402,9 @@ bot.hears('👨‍💼 Панель администратора', async (ctx) =
     [{ text: '🚫 Заблокировать клиента' }],
     [{ text: '🏬 Управление складами' }],
     [{ text: '🛒 Управление товарами' }],
+    [{ text: '💰 Касса' }],
+    [{ text: '📊 Отчёт кассы' }],
+    [{ text: '📈 Сводный отчёт' }],
     [{ text: '📊 Статистика' }],
     [{ text: '🔙 Назад' }]
   ];
@@ -421,6 +425,7 @@ bot.hears('🔙 Назад', async (ctx) => {
   
   const keyboard = [
     [{ text: '📦 Создать заявку' }],
+    [{ text: '💰 Касса' }],
     [{ text: '👨‍💼 Панель администратора' }]
   ];
   
@@ -430,7 +435,144 @@ bot.hears('🔙 Назад', async (ctx) => {
   );
 });
 
-// Обработка текстовых сообщений
+// ============================================================
+// 💰 КАССА — инкассо кассиру через WhatsApp
+// ============================================================
+
+bot.hears('💰 Касса', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!admin.isAdmin(userId)) return;
+
+  orderData.set(userId, { step: 'cash_search', createdAt: Date.now() });
+
+  ctx.reply(
+    '💰 Касса — Инкасса\n\n🔍 Введите имя или телефон клиента:',
+    { reply_markup: { remove_keyboard: true } }
+  );
+});
+
+bot.hears('📈 Сводный отчёт', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!admin.isAdmin(userId)) return;
+
+  await ctx.reply(
+    '📈 Сводный отчёт кассы\n\nВыберите период:',
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '7 дней', callback_data: 'summary_7' }, { text: '14 дней', callback_data: 'summary_14' }],
+          [{ text: '30 дней', callback_data: 'summary_30' }, { text: 'Весь период', callback_data: 'summary_0' }]
+        ]
+      }
+    }
+  );
+});
+
+bot.hears('📊 Отчёт кассы', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!admin.isAdmin(userId)) return;
+
+  try {
+    const lastSent = await database.getLastCashReportSent();
+    const records = await database.getCashReport();
+    const totals = await database.getCashTotals();
+
+    const fromDate = lastSent ? new Date(lastSent).toLocaleDateString('ru-RU') : 'начала';
+    const toDate = new Date().toLocaleDateString('ru-RU');
+
+    let msg = '📊 Отчёт кассы\n📅 ' + fromDate + ' — ' + toDate + '\n\n';
+
+    if (records.length === 0) {
+      msg += '📭 Новых записей нет\n';
+    } else {
+      records.forEach((r, i) => {
+        const date = new Date(r.created_at).toLocaleDateString('ru-RU');
+        msg += (i + 1) + '. ' + r.client_name + ' (' + (r.client_phone || '—') + ')\n';
+        if (r.mode === 'usd' || r.mode === 'both') msg += '   💵 $' + parseFloat(r.usd).toLocaleString('ru-RU') + '\n';
+        if (r.mode === 'somoni' || r.mode === 'both') msg += '   💴 ' + parseFloat(r.somoni).toLocaleString('ru-RU') + ' сом\n';
+        msg += '   📅 ' + date + '\n';
+      });
+    }
+
+    msg += '\n━━━━━━━━━━━━━━━\n';
+    msg += '💵 Итого: *$' + parseFloat(totals.total_usd).toLocaleString('ru-RU') + '*\n';
+    msg += '💴 Итого: *' + parseFloat(totals.total_somoni).toLocaleString('ru-RU') + ' сом*\n';
+    msg += '📦 Записей: ' + totals.count;
+
+    await ctx.reply(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '📤 Передать кассиру', callback_data: 'cash_report_send' }
+        ],
+        [
+          { text: '📥 Скачать Excel', callback_data: 'cash_report_excel' },
+          { text: '❌ Закрыть', callback_data: 'cash_report_close' }
+        ]]
+      }
+    });
+  } catch (error) {
+    console.error('Ошибка отчёта кассы:', error);
+    ctx.reply('❌ Ошибка получения отчёта');
+  }
+});
+
+
+// Вспомогательная функция: формирует и показывает шаблон инкассо
+async function buildCashMessage(ctx, userId, data) {
+  const client = data.cashClient;
+  const lines = [
+    '💰 ИНКАССА',
+    '',
+    '👤 Клиент: ' + client.name,
+    '📞 Телефон: ' + (client.phone || 'не указан')
+  ];
+
+  if (data.cashMode === 'usd') {
+    lines.push('💵 Доллар: *$' + data.cashUsd.toLocaleString('ru-RU') + '*');
+  }
+
+  if (data.cashMode === 'somoni') {
+    lines.push('💴 Сомони: *' + data.cashSomoni.toLocaleString('ru-RU') + ' сом*');
+    lines.push('📈 Курс: *' + data.cashRate.toLocaleString('ru-RU') + '*');
+    const equiv = (data.cashSomoni / data.cashRate).toFixed(2);
+    lines.push('💵 Эквивалент: *$' + parseFloat(equiv).toLocaleString('ru-RU') + '*');
+  }
+
+  if (data.cashMode === 'both') {
+    lines.push('💵 Доллар: *$' + data.cashUsd.toLocaleString('ru-RU') + '*');
+    lines.push('💴 Сомони: *' + data.cashSomoni.toLocaleString('ru-RU') + ' сом*');
+    lines.push('📈 Курс: *' + data.cashRate.toLocaleString('ru-RU') + '*');
+  }
+
+  lines.push('📅 ' + new Date().toLocaleDateString('ru-RU'));
+
+  if (data.cashComment) {
+    lines.push('💬 Комментарий: ' + data.cashComment);
+  }
+
+  const cashMessage = lines.join('\n');
+  data.cashMessage = cashMessage;
+  data.step = 'cash_confirm';
+  orderData.set(userId, data);
+
+  const cashierPhone = process.env.CASHIER_WHATSAPP_PHONE || process.env.WHATSAPP_RECIPIENT;
+
+  return ctx.reply(
+    '📋 Шаблон сообщения кассиру:\n\n' + cashMessage + '\n\n' +
+    '📱 Кассир: ' + (cashierPhone || '❌ не настроен') + '\n\nОтправить?',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Отправить кассиру', callback_data: 'cash_send' },
+          { text: '❌ Отмена', callback_data: 'cash_cancel' }
+        ]]
+      }
+    }
+  );
+}
+
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text;
@@ -451,6 +593,82 @@ bot.on('text', async (ctx) => {
   const data = orderData.get(userId) || { items: [], step: 'name' };
 
   try {
+    // ── Касса: поиск клиента ──
+    if (data.step === 'cash_search' && isAdminUser) {
+      const query = text.trim().toLowerCase();
+      if (query.length < 2) {
+        return ctx.reply('⚠️ Введите минимум 2 символа');
+      }
+      const allClients = await database.getAllClients();
+      const found = allClients.filter(c =>
+        (c.name || '').toLowerCase().includes(query) ||
+        (c.phone || '').toLowerCase().includes(query)
+      ).slice(0, 10);
+
+      if (found.length === 0) {
+        return ctx.reply(`❌ Клиент не найден: "${text}"\n\nПопробуйте ещё раз:`);
+      }
+
+      data.step = 'cash_select_client';
+      data.cashFoundClients = found;
+      orderData.set(userId, data);
+
+      const inlineKeyboard = found.map(c => [{
+        text: `${c.name} (${c.phone || 'без тел.'})`,
+        callback_data: `cash_client_${c.telegram_id}`
+      }]);
+
+      return ctx.reply('👤 Выберите клиента:', {
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      });
+    }
+
+    // ── Касса: ввод суммы (доллар) ──
+    if (data.step === 'cash_enter_usd' && isAdminUser) {
+      const amount = text.trim().replace(',', '.');
+      if (!/^\d+(\.\d+)?$/.test(amount)) {
+        return ctx.reply('⚠️ Введите сумму числом (например: 500)');
+      }
+      data.cashUsd = parseFloat(amount);
+      if (data.cashMode === 'usd') {
+        data.step = 'cash_enter_comment';
+        orderData.set(userId, data);
+        return ctx.reply('💬 Введите комментарий (или нажмите /skip чтобы пропустить):');
+      }
+      data.step = 'cash_enter_somoni';
+      orderData.set(userId, data);
+      return ctx.reply(`💵 Доллар: $${data.cashUsd.toLocaleString('ru-RU')}\n\n💴 Введите сумму в сомони:`);
+    }
+
+    // ── Касса: ввод суммы (сомони) ──
+    if (data.step === 'cash_enter_somoni' && isAdminUser) {
+      const amount = text.trim().replace(',', '.');
+      if (!/^\d+(\.\d+)?$/.test(amount)) {
+        return ctx.reply('⚠️ Введите сумму числом (например: 5000)');
+      }
+      data.cashSomoni = parseFloat(amount);
+      data.step = 'cash_enter_rate';
+      orderData.set(userId, data);
+      return ctx.reply(`💴 Сомони: ${data.cashSomoni.toLocaleString('ru-RU')} сом\n\n📈 Введите курс доллара (сомони за $1):`);
+    }
+
+    // ── Касса: ввод курса (после сомони) ──
+    if (data.step === 'cash_enter_rate' && isAdminUser) {
+      const rate = text.trim().replace(',', '.');
+      if (!/^\d+(\.\d+)?$/.test(rate)) {
+        return ctx.reply('⚠️ Введите курс числом (например: 10900)');
+      }
+      data.cashRate = parseFloat(rate);
+      data.step = 'cash_enter_comment';
+      orderData.set(userId, data);
+      return ctx.reply('💬 Введите комментарий (или нажмите /skip чтобы пропустить):');
+    }
+
+    // ── Касса: ввод комментария ──
+    if (data.step === 'cash_enter_comment' && isAdminUser) {
+      data.cashComment = text.trim() === '/skip' ? '' : text.trim();
+      return buildCashMessage(ctx, userId, data);
+    }
     // Обработка поиска клиента (только для администраторов)
     if (data.step === 'search_client' && isAdminUser) {
       const searchQuery = text.trim().toLowerCase();
@@ -522,7 +740,7 @@ bot.on('text', async (ctx) => {
         orderData.delete(userId);
         
         const keyboard = isAdminUser 
-          ? [[{ text: '📦 Создать заявку' }], [{ text: '👨‍💼 Панель администратора' }]]
+          ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
           : [[{ text: '🏬 Склад' }]];
         
         return ctx.reply(
@@ -546,7 +764,7 @@ bot.on('text', async (ctx) => {
         orderData.delete(userId);
         
         const keyboard = isAdminUser 
-          ? [[{ text: '📦 Создать заявку' }], [{ text: '👨‍💼 Панель администратора' }]]
+          ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
           : [[{ text: '🏬 Склад' }]];
         
         return ctx.reply(
@@ -769,14 +987,31 @@ bot.on('text', async (ctx) => {
 
     // Шаг 7: Номер транспорта
     if (data.step === 'transport') {
+      if (text === '🚫 Отменить заявку') {
+        orderData.delete(userId);
+        const kb = isAdminUser
+          ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
+          : [[{ text: '🏬 Склад' }]];
+        return ctx.reply('❌ Заявка отменена.', { reply_markup: { keyboard: kb, resize_keyboard: true } });
+      }
       data.transport = text;
       data.step = 'comment';
       orderData.set(userId, data);
-      return ctx.reply('📝 Введите комментарий или отправьте "-" чтобы пропустить:');
+      return ctx.reply(
+        '📝 Введите комментарий или отправьте "-" чтобы пропустить:',
+        { reply_markup: { keyboard: [[{ text: '🚫 Отменить заявку' }]], resize_keyboard: true } }
+      );
     }
 
     // Шаг 8: Комментарий
     if (data.step === 'comment') {
+      if (text === '🚫 Отменить заявку') {
+        orderData.delete(userId);
+        const kb = isAdminUser
+          ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
+          : [[{ text: '🏬 Склад' }]];
+        return ctx.reply('❌ Заявка отменена.', { reply_markup: { keyboard: kb, resize_keyboard: true } });
+      }
       data.comment = text === '-' ? '' : text;
       data.step = 'confirm';
       orderData.set(userId, data);
@@ -936,6 +1171,7 @@ bot.on('text', async (ctx) => {
       if (isAdminUser) {
         const keyboard = [
           [{ text: '📦 Создать заявку' }],
+          [{ text: '💰 Касса' }],
           [{ text: '👨‍💼 Панель администратора' }]
         ];
         
@@ -960,9 +1196,11 @@ bot.on('text', async (ctx) => {
     // Отмена заявки
     if (text === '❌ Отменить') {
       orderData.delete(userId);
-      ctx.reply('❌ Заявка отменена. Для новой заявки нажмите /start', {
-        reply_markup: { remove_keyboard: true }
-      });
+      const isAdminUser2 = admin.isAdmin(userId);
+      const keyboard = isAdminUser2
+        ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
+        : [[{ text: '🏬 Склад' }]];
+      ctx.reply('❌ Заявка отменена.', { reply_markup: { keyboard, resize_keyboard: true } });
     }
 
   } catch (error) {
@@ -980,7 +1218,13 @@ bot.on('callback_query', async (ctx) => {
   // Проверка прав доступа
   const isAdminUser = admin.isAdmin(userId);
   
-  if (!isAdminUser) {
+  // Для обычных клиентов разрешаем только их собственные callback (approve/reject не нужны)
+  // Блокируем только admin-specific действия
+  const adminOnlyCallbacks = ['select_client_', 'cash_client_', 'cash_mode_', 'cash_send', 'cash_cancel',
+    'cash_report_close', 'cash_report_excel', 'cash_report_send', 'summary_'];
+  const isAdminCallback = adminOnlyCallbacks.some(prefix => callbackData.startsWith(prefix));
+  
+  if (!isAdminUser && isAdminCallback) {
     return ctx.answerCbQuery('❌ У вас нет прав для этого действия');
   }
   
@@ -1038,6 +1282,296 @@ bot.on('callback_query', async (ctx) => {
         reply_markup: { remove_keyboard: true }
       });
     }
+
+    // ── Касса: выбор клиента ──
+    if (callbackData.startsWith('cash_client_')) {
+      const clientTelegramId = callbackData.replace('cash_client_', '');
+      const allClients = await database.getAllClients();
+      const client = allClients.find(c => String(c.telegram_id) === String(clientTelegramId));
+
+      if (!client) return ctx.answerCbQuery('❌ Клиент не найден');
+
+      orderData.set(userId, {
+        step: 'cash_select_mode',
+        cashClient: client,
+        createdAt: Date.now()
+      });
+
+      await ctx.answerCbQuery(`✅ ${client.name}`);
+      await ctx.editMessageText(
+        `💰 Касса — Инкассо\n\n` +
+        `👤 Клиент: ${client.name}\n` +
+        `📞 Телефон: ${client.phone || 'не указан'}\n\n` +
+        `💱 Какую валюту принёс клиент?`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '💵 Доллар', callback_data: 'cash_mode_usd' }],
+              [{ text: '💴 Сомони', callback_data: 'cash_mode_somoni' }],
+              [{ text: '💵+💴 Обе валюты', callback_data: 'cash_mode_both' }],
+              [{ text: '❌ Отмена', callback_data: 'cash_cancel' }]
+            ]
+          }
+        }
+      );
+    }
+
+    // ── Касса: выбор режима валюты ──
+    if (callbackData.startsWith('cash_mode_')) {
+      const mode = callbackData.replace('cash_mode_', ''); // usd | somoni | both
+      const data = orderData.get(userId);
+      if (!data) return ctx.answerCbQuery('❌ Данные устарели');
+
+      data.cashMode = mode;
+      orderData.set(userId, data);
+
+      if (mode === 'usd' || mode === 'both') {
+        data.step = 'cash_enter_usd';
+        orderData.set(userId, data);
+        await ctx.answerCbQuery();
+        await ctx.editMessageText(
+          `👤 ${data.cashClient.name}\n\n💵 Введите сумму в долларах:`
+        );
+      } else {
+        // только сомони
+        data.step = 'cash_enter_somoni';
+        orderData.set(userId, data);
+        await ctx.answerCbQuery();
+        await ctx.editMessageText(
+          `👤 ${data.cashClient.name}\n\n💴 Введите сумму в сомони:`
+        );
+      }
+    }
+
+    // ── Касса: подтверждение отправки ──
+    if (callbackData === 'cash_send') {
+      const data = orderData.get(userId);
+      if (!data || data.step !== 'cash_confirm') return ctx.answerCbQuery('❌ Данные устарели');
+
+      const cashierPhone = process.env.CASHIER_WHATSAPP_PHONE || process.env.WHATSAPP_RECIPIENT;
+      if (!cashierPhone) {
+        await ctx.answerCbQuery('❌ Номер кассира не настроен');
+        return ctx.reply('❌ Добавьте переменную CASHIER_WHATSAPP_PHONE в Railway');
+      }
+
+      const cashierInstanceId = process.env.GREEN_API_INSTANCE_ID_PERSONAL || process.env.GREEN_API_INSTANCE_ID;
+      const cashierToken = process.env.GREEN_API_TOKEN_PERSONAL || process.env.GREEN_API_TOKEN;
+      const sent = await whatsapp.sendMessage(data.cashMessage, cashierPhone, cashierInstanceId, cashierToken);
+
+      // Сохраняем запись в БД
+      await database.addCashRecord(
+        data.cashClient?.telegram_id,
+        data.cashClient?.name,
+        data.cashClient?.phone,
+        data.cashMode,
+        data.cashUsd || 0,
+        data.cashSomoni || 0,
+        data.cashRate || 0,
+        userId,
+        data.cashComment || ''
+      );
+      await ctx.answerCbQuery(sent ? '✅ Отправлено!' : '❌ Ошибка отправки');
+      await ctx.editMessageText(
+        sent
+          ? `✅ Сообщение отправлено кассиру!\n\n${data.cashMessage}`
+          : `❌ Ошибка отправки в WhatsApp. Сообщение:\n\n${data.cashMessage}`
+      );
+
+      orderData.delete(userId);
+
+      setTimeout(() => {
+        ctx.reply('Главное меню:', {
+          reply_markup: {
+            keyboard: [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]],
+            resize_keyboard: true
+          }
+        });
+      }, 1500);
+    }
+
+    if (callbackData === 'cash_cancel') {
+      orderData.delete(userId);
+      await ctx.answerCbQuery('Отменено');
+      await ctx.editMessageText('❌ Инкассо отменено');
+    }
+
+    if (callbackData === 'cash_report_close') {
+      await ctx.answerCbQuery('Закрыто');
+      await ctx.editMessageText('📊 Отчёт закрыт');
+    }
+
+    if (callbackData === 'cash_report_excel') {
+      try {
+        await ctx.answerCbQuery('⏳ Генерирую Excel...');
+        const excelExporter = require('./excel-export');
+        const excelResult = await excelExporter.exportCashReport();
+        if (excelResult.success) {
+          const lastSent = await database.getLastCashReportSent();
+          const fromDate = lastSent ? new Date(lastSent).toLocaleDateString('ru-RU') : 'начала';
+          const toDate = new Date().toLocaleDateString('ru-RU');
+          await ctx.replyWithDocument(
+            { source: excelResult.filePath, filename: excelResult.fileName },
+            { caption: '📊 Отчёт кассы: ' + fromDate + ' — ' + toDate }
+          );
+        } else {
+          await ctx.reply('❌ Ошибка генерации Excel');
+        }
+      } catch (error) {
+        console.error('Ошибка Excel отчёта:', error);
+        await ctx.reply('❌ Ошибка: ' + error.message);
+      }
+    }
+
+    // Сводный отчёт по периоду
+    if (callbackData && callbackData.startsWith('summary_')) {
+      try {
+        const days = parseInt(callbackData.split('_')[1]);
+        const label = days === 0 ? 'весь период' : days + ' дней';
+
+        await ctx.answerCbQuery('⏳ Формирую отчёт...');
+
+        const summary = await database.getCashSummary(days || null);
+        const { totals, monthly } = summary;
+
+        let msg = '📈 Сводный отчёт кассы (' + label + ')\n\n';
+
+        if (monthly.length === 0) {
+          msg += '📭 Данных нет\n';
+        } else {
+          monthly.forEach((m, i) => {
+            const [year, month] = m.month.split('-');
+            const monthName = new Date(year, month - 1).toLocaleString('ru-RU', { month: 'long', year: 'numeric' });
+            msg += (i + 1) + '. ' + monthName + '\n';
+            msg += '   💵 $' + parseFloat(m.usd).toLocaleString('ru-RU') + '\n';
+            msg += '   💴 ' + parseFloat(m.somoni).toLocaleString('ru-RU') + ' сом\n';
+            msg += '   📦 ' + m.count + ' записей\n';
+          });
+        }
+
+        msg += '\n━━━━━━━━━━━━━━━\n';
+        msg += '💵 Итого: *$' + parseFloat(totals.total_usd).toLocaleString('ru-RU') + '*\n';
+        msg += '💴 Итого: *' + parseFloat(totals.total_somoni).toLocaleString('ru-RU') + ' сом*\n';
+        msg += '📦 Всего записей: ' + totals.count;
+
+        // Генерируем Excel
+        const excelExporter = require('./excel-export');
+        const excelResult = await excelExporter.exportCashSummary(days || null);
+
+        await ctx.editMessageText(msg, { parse_mode: 'Markdown' });
+
+        if (excelResult.success) {
+          await ctx.replyWithDocument(
+            { source: excelResult.filePath, filename: excelResult.fileName },
+            { caption: '📈 Сводный отчёт кассы: ' + label }
+          );
+        }
+      } catch (error) {
+        console.error('Ошибка сводного отчёта:', error);
+        await ctx.answerCbQuery('❌ Ошибка');
+      }
+    }
+
+    if (callbackData === 'cash_report_send') {
+      try {
+        const lastSent = await database.getLastCashReportSent();
+        const totals = await database.getCashTotals();
+        const records = await database.getCashReport();
+
+        const fromDate = lastSent
+          ? new Date(lastSent).toLocaleDateString('ru-RU')
+          : 'начала';
+        const toDate = new Date().toLocaleDateString('ru-RU');
+
+        let msg = '📊 ОТЧЁТ КАССЫ\n';
+        msg += '📅 ' + fromDate + ' — ' + toDate + '\n\n';
+
+        records.forEach((r, i) => {
+          const date = new Date(r.created_at).toLocaleDateString('ru-RU');
+          msg += (i + 1) + '. ' + r.client_name + '\n';
+          if (r.mode === 'usd' || r.mode === 'both') msg += '   💵 $' + parseFloat(r.usd).toLocaleString('ru-RU') + '\n';
+          if (r.mode === 'somoni' || r.mode === 'both') msg += '   💴 ' + parseFloat(r.somoni).toLocaleString('ru-RU') + ' сом\n';
+          msg += '   📅 ' + date + '\n';
+        });
+
+        msg += '\n━━━━━━━━━━━━━━━\n';
+        msg += '💵 Итого: $' + parseFloat(totals.total_usd).toLocaleString('ru-RU') + '\n';
+        msg += '💴 Итого: ' + parseFloat(totals.total_somoni).toLocaleString('ru-RU') + ' сом';
+
+        // Генерируем Excel
+        const excelExporter = require('./excel-export');
+        const excelResult = await excelExporter.exportCashReport();
+
+        // Отправляем WhatsApp кассиру
+        const cashierPhone = process.env.CASHIER_WHATSAPP_PHONE || process.env.WHATSAPP_RECIPIENT;
+        const cashierInstanceId = process.env.GREEN_API_INSTANCE_ID_PERSONAL || process.env.GREEN_API_INSTANCE_ID;
+        const cashierToken = process.env.GREEN_API_TOKEN_PERSONAL || process.env.GREEN_API_TOKEN;
+        const sent = await whatsapp.sendMessage(msg, cashierPhone, cashierInstanceId, cashierToken);
+
+        if (excelResult.success) {
+          await ctx.replyWithDocument(
+            { source: excelResult.filePath, filename: excelResult.fileName },
+            { caption: '📊 Отчёт кассы: ' + fromDate + ' — ' + toDate }
+          );
+          await whatsapp.sendFile(
+            excelResult.filePath, excelResult.fileName,
+            '📊 Отчёт кассы: ' + fromDate + ' — ' + toDate,
+            cashierPhone, cashierInstanceId, cashierToken
+          );
+        }
+
+        // Сбрасываем период после успешной отправки
+        if (sent) await database.markCashReportSent();
+
+        await ctx.answerCbQuery(sent ? '✅ Отправлено!' : '❌ Ошибка WhatsApp');
+        await ctx.editMessageText(
+          (sent ? '✅ Отчёт передан кассиру!\n\n' : '⚠️ WhatsApp не отправлен\n\n') + msg
+        );
+      } catch (error) {
+        console.error('Ошибка отправки отчёта:', error);
+        await ctx.answerCbQuery('❌ Ошибка');
+      }
+    }
+
+
+        if (callbackData === 'cash_report_close') {
+      await ctx.answerCbQuery('Закрыто');
+      await ctx.editMessageText('📊 Отчёт закрыт');
+    }
+
+    if (callbackData === 'cash_report_send') {
+      try {
+        const totals = await database.getCashTotals(7);
+        const records = await database.getCashReport(7);
+
+        let msg = '📊 ОТЧЁТ КАССЫ (7 дней)\n\n';
+        records.forEach((r, i) => {
+          const date = new Date(r.created_at).toLocaleDateString('ru-RU');
+          msg += `${i + 1}. ${r.client_name}\n`;
+          if (r.mode === 'usd' || r.mode === 'both') msg += `   💵 $${parseFloat(r.usd).toLocaleString('ru-RU')}\n`;
+          if (r.mode === 'somoni' || r.mode === 'both') msg += `   💴 ${parseFloat(r.somoni).toLocaleString('ru-RU')} сом\n`;
+          msg += `   📅 ${date}\n`;
+        });
+        msg += `\n━━━━━━━━━━━━━━━\n`;
+        msg += `💵 Итого: $${parseFloat(totals.total_usd).toLocaleString('ru-RU')}\n`;
+        msg += `💴 Итого: ${parseFloat(totals.total_somoni).toLocaleString('ru-RU')} сом\n`;
+        msg += `📅 ${new Date().toLocaleDateString('ru-RU')}`;
+
+        const cashierPhone = process.env.CASHIER_WHATSAPP_PHONE || process.env.WHATSAPP_RECIPIENT;
+        const cashierInstanceId = process.env.GREEN_API_INSTANCE_ID_PERSONAL || process.env.GREEN_API_INSTANCE_ID;
+        const cashierToken = process.env.GREEN_API_TOKEN_PERSONAL || process.env.GREEN_API_TOKEN;
+
+        const sent = await whatsapp.sendMessage(msg, cashierPhone, cashierInstanceId, cashierToken);
+        await ctx.answerCbQuery(sent ? '✅ Отправлено!' : '❌ Ошибка');
+        await ctx.editMessageText(sent
+          ? '✅ Отчёт передан кассиру!\n\n' + msg
+          : '❌ Ошибка отправки. Проверьте настройки WhatsApp.'
+        );
+      } catch (error) {
+        console.error('Ошибка отправки отчёта:', error);
+        await ctx.answerCbQuery('❌ Ошибка');
+      }
+    }
+
   } catch (error) {
     console.error('Ошибка обработки callback:', error);
     ctx.answerCbQuery('❌ Произошла ошибка');
@@ -1131,6 +1665,7 @@ bot.hears('🔙 Отмена', async (ctx) => {
   if (isAdminUser) {
     const keyboard = [
       [{ text: '📦 Создать заявку' }],
+      [{ text: '💰 Касса' }],
       [{ text: '👨‍💼 Панель администратора' }]
     ];
     

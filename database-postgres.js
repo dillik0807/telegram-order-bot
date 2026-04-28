@@ -303,6 +303,7 @@ class Database {
         SELECT 
           warehouse,
           COUNT(*) as orders_count,
+          COUNT(DISTINCT user_id) as unique_clients,
           MAX(created_at) as last_order_date
         FROM orders 
         WHERE (is_deleted = 0 OR is_deleted IS NULL)
@@ -448,6 +449,232 @@ class Database {
         [warehouseName]
       );
       return result.rows[0] ? result.rows[0].whatsapp_group_id : null;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async updateWarehouseWhatsAppPhone(warehouseName, whatsappPhone) {
+    try {
+      // Добавляем колонку если нет
+      await this.pool.query(`ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT`).catch(() => {});
+      const result = await this.pool.query(
+        'UPDATE warehouses SET whatsapp_phone = $1 WHERE name = $2',
+        [whatsappPhone, warehouseName]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getWarehouseWhatsAppSettings(warehouseName) {
+    try {
+      const result = await this.pool.query(
+        'SELECT whatsapp_group_id, whatsapp_phone, green_api_instance_id, green_api_token FROM warehouses WHERE name = $1',
+        [warehouseName]
+      );
+      return result.rows[0] || {
+        whatsapp_group_id: null,
+        whatsapp_phone: null,
+        green_api_instance_id: null,
+        green_api_token: null
+      };
+    } catch (error) {
+      return { whatsapp_group_id: null, whatsapp_phone: null, green_api_instance_id: null, green_api_token: null };
+    }
+  }
+
+  async updateWarehouseGreenApi(warehouseName, instanceId, token) {
+    try {
+      await this.pool.query(`ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS green_api_instance_id TEXT`).catch(() => {});
+      await this.pool.query(`ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS green_api_token TEXT`).catch(() => {});
+      const result = await this.pool.query(
+        'UPDATE warehouses SET green_api_instance_id = $1, green_api_token = $2 WHERE name = $3',
+        [instanceId, token, warehouseName]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async addCashRecord(clientId, clientName, clientPhone, mode, usd, somoni, rate, adminId, comment) {
+    try {
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS cash_records (
+          id SERIAL PRIMARY KEY,
+          client_id BIGINT,
+          client_name TEXT,
+          client_phone TEXT,
+          mode TEXT NOT NULL,
+          usd NUMERIC DEFAULT 0,
+          somoni NUMERIC DEFAULT 0,
+          rate NUMERIC DEFAULT 0,
+          admin_id BIGINT,
+          comment TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await this.pool.query(
+        `INSERT INTO cash_records (client_id, client_name, client_phone, mode, usd, somoni, rate, admin_id, comment)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [clientId, clientName, clientPhone, mode, usd || 0, somoni || 0, rate || 0, adminId, comment || null]
+      );
+      return true;
+    } catch (error) {
+      console.error('❌ Ошибка сохранения записи кассы:', error);
+      return false;
+    }
+  }
+
+  async getLastCashReportSent() {
+    try {
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS cash_report_sent (
+          id SERIAL PRIMARY KEY,
+          sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      const result = await this.pool.query(
+        `SELECT sent_at FROM cash_report_sent ORDER BY sent_at DESC LIMIT 1`
+      );
+      return result.rows.length > 0 ? result.rows[0].sent_at : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async markCashReportSent() {
+    try {
+      await this.pool.query(`INSERT INTO cash_report_sent DEFAULT VALUES`);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async getCashReport() {
+    try {
+      const lastSent = await this.getLastCashReportSent();
+      let whereClause = '';
+      let params = [];
+      if (lastSent) {
+        whereClause = `WHERE created_at > $1`;
+        params = [lastSent];
+      }
+      const result = await this.pool.query(`
+        SELECT client_name, client_phone, mode, usd, somoni, rate, comment, created_at
+        FROM cash_records ${whereClause}
+        ORDER BY created_at DESC
+      `, params);
+      return result.rows;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async getCashTotals() {
+    try {
+      const lastSent = await this.getLastCashReportSent();
+      let whereClause = '';
+      let params = [];
+      if (lastSent) {
+        whereClause = `WHERE created_at > $1`;
+        params = [lastSent];
+      }
+      const result = await this.pool.query(`
+        SELECT 
+          COALESCE(SUM(usd), 0) AS total_usd,
+          COALESCE(SUM(somoni), 0) AS total_somoni,
+          COUNT(*) AS count
+        FROM cash_records ${whereClause}
+      `, params);
+      return result.rows[0];
+    } catch (error) {
+      return { total_usd: 0, total_somoni: 0, count: 0 };
+    }
+  }
+
+  async getCashSummary(days) {
+    try {
+      const where = days ? `WHERE created_at >= NOW() - INTERVAL '${days} days'` : '';
+      const totals = await this.pool.query(`
+        SELECT 
+          COALESCE(SUM(usd), 0) AS total_usd,
+          COALESCE(SUM(somoni), 0) AS total_somoni,
+          COUNT(*) AS count
+        FROM cash_records ${where}
+      `);
+      const monthly = await this.pool.query(`
+        SELECT 
+          TO_CHAR(created_at, 'YYYY-MM') AS month,
+          COALESCE(SUM(usd), 0) AS usd,
+          COALESCE(SUM(somoni), 0) AS somoni,
+          COUNT(*) AS count
+        FROM cash_records ${where}
+        GROUP BY month
+        ORDER BY month DESC
+      `);
+      return { totals: totals.rows[0], monthly: monthly.rows };
+    } catch (error) {
+      return { totals: { total_usd: 0, total_somoni: 0, count: 0 }, monthly: [] };
+    }
+  }
+
+  async getClientOrders(clientTelegramId, limit = 5) {
+    try {
+      const result = await this.pool.query(`
+        SELECT o.id, o.warehouse, o.transport_number, o.comment, o.created_at,
+               array_agg(oi.product_name || ' — ' || oi.quantity ORDER BY oi.id) as items
+        FROM orders o
+        JOIN users u ON o.user_id = u.id
+        LEFT JOIN order_items oi ON oi.order_id = o.id
+        WHERE u.telegram_id = $1 AND (o.is_deleted = 0 OR o.is_deleted IS NULL)
+        GROUP BY o.id, o.warehouse, o.transport_number, o.comment, o.created_at
+        ORDER BY o.created_at DESC
+        LIMIT $2
+      `, [clientTelegramId, limit]);
+      return result.rows;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async softDeleteOrder(orderId, deletedBy = 'admin') {
+    try {
+      const result = await this.pool.query(
+        'UPDATE orders SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP, deleted_by = $1 WHERE id = $2',
+        [deletedBy, orderId]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async restoreOrder(orderId, restoredBy = 'admin') {
+    try {
+      const result = await this.pool.query(
+        'UPDATE orders SET is_deleted = 0, deleted_at = NULL, deleted_by = NULL, restored_at = CURRENT_TIMESTAMP, restored_by = $1 WHERE id = $2',
+        [restoredBy, orderId]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getDeletedOrders() {
+    try {
+      const result = await this.pool.query(`
+        SELECT o.*, c.name as client_name, c.phone 
+        FROM orders o
+        LEFT JOIN clients c ON o.client_id = c.id
+        WHERE o.is_deleted = 1
+        ORDER BY o.deleted_at DESC
+      `);
+      return result.rows;
     } catch (error) {
       throw error;
     }

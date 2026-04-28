@@ -102,5 +102,49 @@ async function sendToGroup(message, groupId, customInstanceId = null, customToke
 
 module.exports = {
   sendMessage,
-  sendToGroup
+  sendToGroup,
+  sendFile
 };
+
+async function sendFile(filePath, fileName, caption, recipient, customInstanceId = null, customToken = null) {
+  const idInstance = customInstanceId || process.env.GREEN_API_INSTANCE_ID;
+  const apiTokenInstance = customToken || process.env.GREEN_API_TOKEN;
+  const phoneNumber = recipient || process.env.WHATSAPP_RECIPIENT;
+
+  if (!idInstance || !apiTokenInstance || !phoneNumber) {
+    console.log('⚠️ Green-API не настроен для отправки файла');
+    return false;
+  }
+
+  try {
+    const fs = require('fs');
+    const FormData = require('form-data');
+
+    const url = `https://api.green-api.com/waInstance${idInstance}/sendFileByUpload/${apiTokenInstance}`;
+
+    const form = new FormData();
+    form.append('chatId', phoneNumber + '@c.us');
+    form.append('file', fs.createReadStream(filePath), { filename: fileName });
+    form.append('fileName', fileName);
+    if (caption) form.append('caption', caption);
+
+    console.log(`📎 Отправка файла ${fileName} в WhatsApp (Instance: ${idInstance})...`);
+
+    const axios = require('axios');
+    const response = await axios.post(url, form, {
+      headers: form.getHeaders(),
+      timeout: 30000
+    });
+
+    if (response.data && response.data.idMessage) {
+      console.log('✅ Файл отправлен в WhatsApp!');
+      return true;
+    } else {
+      console.log('⚠️ Неожиданный ответ:', response.data);
+      return false;
+    }
+  } catch (error) {
+    console.error('❌ Ошибка отправки файла в WhatsApp:', error.response?.data || error.message);
+    return false;
+  }
+}

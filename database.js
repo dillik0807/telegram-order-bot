@@ -157,6 +157,34 @@ class Database {
         )
       `);
 
+      // Таблица записей кассы
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS cash_records (
+          id SERIAL PRIMARY KEY,
+          client_id BIGINT,
+          client_name TEXT,
+          client_phone TEXT,
+          mode TEXT NOT NULL,
+          usd NUMERIC DEFAULT 0,
+          somoni NUMERIC DEFAULT 0,
+          rate NUMERIC DEFAULT 0,
+          admin_id BIGINT,
+          comment TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Миграция: добавить колонку comment если её нет
+      await this.pool.query(`ALTER TABLE cash_records ADD COLUMN IF NOT EXISTS comment TEXT`).catch(() => {});
+
+      // Таблица дат передачи отчёта кассиру
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS cash_report_sent (
+          id SERIAL PRIMARY KEY,
+          sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
       console.log('✅ Таблицы PostgreSQL инициализированы');
     } catch (error) {
       console.error('❌ Ошибка инициализации таблиц:', error);
@@ -358,6 +386,7 @@ class Database {
         SELECT 
           warehouse,
           COUNT(*) as orders_count,
+          COUNT(DISTINCT user_id) as unique_clients,
           MAX(created_at) as last_order_date
         FROM orders 
         WHERE (is_deleted = 0 OR is_deleted IS NULL)
@@ -666,6 +695,149 @@ class Database {
     } catch (error) {
       console.error('❌ Ошибка получения удаленных заявок:', error);
       throw error;
+    }
+  }
+
+  async getClientOrders(clientTelegramId, limit = 5) {
+    try {
+      const result = await this.pool.query(`
+        SELECT o.id, o.warehouse, o.transport_number, o.comment, o.created_at,
+               array_agg(oi.product_name || ' — ' || oi.quantity ORDER BY oi.id) as items
+        FROM orders o
+        JOIN users u ON o.user_id = u.id
+        LEFT JOIN order_items oi ON oi.order_id = o.id
+        WHERE u.telegram_id = $1 AND (o.is_deleted = 0 OR o.is_deleted IS NULL)
+        GROUP BY o.id, o.warehouse, o.transport_number, o.comment, o.created_at
+        ORDER BY o.created_at DESC
+        LIMIT $2
+      `, [clientTelegramId, limit]);
+      return result.rows;
+    } catch (error) {
+      console.error('❌ Ошибка получения заявок клиента:', error);
+      return [];
+    }
+  }
+
+  async addCashRecord(clientId, clientName, clientPhone, mode, usd, somoni, rate, adminId, comment) {
+    try {
+      await this.pool.query(
+        `INSERT INTO cash_records (client_id, client_name, client_phone, mode, usd, somoni, rate, admin_id, comment)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [clientId, clientName, clientPhone, mode, usd || 0, somoni || 0, rate || 0, adminId, comment || null]
+      ).catch(async () => {
+        // Если колонки comment нет — добавляем её и повторяем
+        await this.pool.query(`ALTER TABLE cash_records ADD COLUMN IF NOT EXISTS comment TEXT`);
+        await this.pool.query(
+          `INSERT INTO cash_records (client_id, client_name, client_phone, mode, usd, somoni, rate, admin_id, comment)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [clientId, clientName, clientPhone, mode, usd || 0, somoni || 0, rate || 0, adminId, comment || null]
+        );
+      });
+      return true;
+    } catch (error) {
+      console.error('❌ Ошибка сохранения записи кассы:', error);
+      return false;
+    }
+  }
+
+  async getLastCashReportSent() {
+    try {
+      const result = await this.pool.query(
+        `SELECT sent_at FROM cash_report_sent ORDER BY sent_at DESC LIMIT 1`
+      );
+      return result.rows.length > 0 ? result.rows[0].sent_at : null;
+    } catch (error) {
+      console.error('❌ Ошибка получения даты передачи:', error);
+      return null;
+    }
+  }
+
+  async markCashReportSent() {
+    try {
+      await this.pool.query(`INSERT INTO cash_report_sent DEFAULT VALUES`);
+      return true;
+    } catch (error) {
+      console.error('❌ Ошибка сохранения даты передачи:', error);
+      return false;
+    }
+  }
+
+  async getCashSummary(days) {
+    try {
+      const where = days ? `WHERE created_at >= NOW() - INTERVAL '${days} days'` : '';
+      // Итоги по периоду
+      const totals = await this.pool.query(`
+        SELECT 
+          COALESCE(SUM(usd), 0) AS total_usd,
+          COALESCE(SUM(somoni), 0) AS total_somoni,
+          COUNT(*) AS count
+        FROM cash_records ${where}
+      `);
+      // Итоги по месяцам
+      const monthly = await this.pool.query(`
+        SELECT 
+          TO_CHAR(created_at, 'YYYY-MM') AS month,
+          COALESCE(SUM(usd), 0) AS usd,
+          COALESCE(SUM(somoni), 0) AS somoni,
+          COUNT(*) AS count
+        FROM cash_records ${where}
+        GROUP BY month
+        ORDER BY month DESC
+      `);
+      return { totals: totals.rows[0], monthly: monthly.rows };
+    } catch (error) {
+      console.error('❌ Ошибка сводного отчёта:', error);
+      return { totals: { total_usd: 0, total_somoni: 0, count: 0 }, monthly: [] };
+    }
+  }
+
+  async getCashReport(days) {
+    try {
+      const lastSent = await this.getLastCashReportSent();
+      let whereClause;
+      let params = [];
+      if (lastSent) {
+        whereClause = `WHERE created_at > $1`;
+        params = [lastSent];
+      } else {
+        whereClause = `WHERE created_at >= NOW() - INTERVAL '${days} days'`;
+      }
+      const result = await this.pool.query(`
+        SELECT client_name, client_phone, mode, usd, somoni, rate, comment, created_at
+        FROM cash_records
+        ${whereClause}
+        ORDER BY created_at DESC
+      `, params);
+      return result.rows;
+    } catch (error) {
+      console.error('❌ Ошибка получения отчёта кассы:', error);
+      return [];
+    }
+  }
+
+  async getCashTotals(days = 7) {
+    try {
+      const lastSent = await this.getLastCashReportSent();
+      let whereClause;
+      let params = [];
+      if (lastSent) {
+        whereClause = `WHERE created_at > $1`;
+        params = [lastSent];
+      } else {
+        whereClause = `WHERE created_at >= NOW() - INTERVAL '${days} days'`;
+      }
+      const result = await this.pool.query(`
+        SELECT 
+          COALESCE(SUM(usd), 0) AS total_usd,
+          COALESCE(SUM(somoni), 0) AS total_somoni,
+          COUNT(*) AS count
+        FROM cash_records
+        ${whereClause}
+      `, params);
+      return result.rows[0];
+    } catch (error) {
+      console.error('❌ Ошибка получения итогов кассы:', error);
+      return { total_usd: 0, total_somoni: 0, count: 0 };
     }
   }
 

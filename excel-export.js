@@ -363,6 +363,138 @@ class ExcelExporter {
       return { success: false, error: error.message };
     }
   }
+  // Экспорт отчёта кассы
+  async exportCashReport(days = 7) {
+    try {
+      const records = await database.getCashReport(days);
+      const totals = await database.getCashTotals(days);
+
+      const rows = [];
+      let rowNum = 1;
+
+      records.forEach(r => {
+        const date = new Date(r.created_at).toLocaleDateString('ru-RU');
+        const usd = parseFloat(r.usd) || 0;
+        const somoni = parseFloat(r.somoni) || 0;
+        const rate = parseFloat(r.rate) || 0;
+        const phone = r.client_phone || '—';
+
+        const comment = r.comment || '';
+        if (r.mode === 'usd') {
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd, 'Обем года': comment });
+        } else if (r.mode === 'somoni') {
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '', 'Обем года': comment });
+        } else if (r.mode === 'both') {
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd, 'Обем года': comment });
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '', 'Обем года': comment });
+        }
+      });
+
+      // Итоговая строка
+      rows.push({ '№': '', 'Дата': '', 'Клиент': 'ИТОГО', 'Телефон': '', 'Сомони': parseFloat(totals.total_somoni), 'Курс $': '', 'Доллар': parseFloat(totals.total_usd), 'Обем года': '' });
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+
+      // Ширина колонок
+      worksheet['!cols'] = [
+        { wch: 5  }, // №
+        { wch: 12 }, // Дата
+        { wch: 25 }, // Клиент
+        { wch: 16 }, // Телефон
+        { wch: 14 }, // Сомони
+        { wch: 10 }, // Курс $
+        { wch: 12 }, // Доллар
+        { wch: 20 }  // Обем года
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Отчёт кассы');
+
+      const fileName = `cash_report_${this.getDateString()}.xlsx`;
+      const filePath = path.join(this.exportDir, fileName);
+      XLSX.writeFile(workbook, filePath);
+
+      return { success: true, fileName, filePath };
+    } catch (error) {
+      console.error('Ошибка экспорта кассы:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Сводный Excel отчёт по периоду
+  async exportCashSummary(days) {
+    try {
+      const database = require('./database');
+      let records, totals;
+
+      if (days) {
+        // Получаем записи за указанный период
+        const result = await database.pool.query(`
+          SELECT client_name, client_phone, mode, usd, somoni, rate, created_at
+          FROM cash_records
+          WHERE created_at >= NOW() - INTERVAL '${days} days'
+          ORDER BY created_at DESC
+        `);
+        records = result.rows;
+        const t = await database.pool.query(`
+          SELECT COALESCE(SUM(usd),0) AS total_usd, COALESCE(SUM(somoni),0) AS total_somoni
+          FROM cash_records WHERE created_at >= NOW() - INTERVAL '${days} days'
+        `);
+        totals = t.rows[0];
+      } else {
+        // Весь период
+        const result = await database.pool.query(`
+          SELECT client_name, client_phone, mode, usd, somoni, rate, created_at
+          FROM cash_records ORDER BY created_at DESC
+        `);
+        records = result.rows;
+        const t = await database.pool.query(`
+          SELECT COALESCE(SUM(usd),0) AS total_usd, COALESCE(SUM(somoni),0) AS total_somoni
+          FROM cash_records
+        `);
+        totals = t.rows[0];
+      }
+
+      const rows = [];
+      let rowNum = 1;
+
+      records.forEach(r => {
+        const date = new Date(r.created_at).toLocaleDateString('ru-RU');
+        const usd = parseFloat(r.usd) || 0;
+        const somoni = parseFloat(r.somoni) || 0;
+        const rate = parseFloat(r.rate) || 0;
+        const phone = r.client_phone || '—';
+
+        if (r.mode === 'usd') {
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
+        } else if (r.mode === 'somoni') {
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
+        } else if (r.mode === 'both') {
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
+          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
+        }
+      });
+
+      rows.push({ '№': '', 'Дата': '', 'Клиент': 'ИТОГО', 'Телефон': '', 'Сомони': parseFloat(totals.total_somoni), 'Курс $': '', 'Доллар': parseFloat(totals.total_usd) });
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 25 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 12 }];
+
+      const workbook = XLSX.utils.book_new();
+      const label = days ? days + '_дней' : 'весь_период';
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Отчёт кассы');
+
+      const fileName = `cash_summary_${label}_${this.getDateString()}.xlsx`;
+      const filePath = path.join(this.exportDir, fileName);
+      XLSX.writeFile(workbook, filePath);
+
+      return { success: true, fileName, filePath };
+    } catch (error) {
+      console.error('Ошибка сводного Excel:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
   getDateString() {
     const now = new Date();
     const year = now.getFullYear();
