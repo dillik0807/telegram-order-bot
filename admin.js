@@ -435,25 +435,37 @@ function setupAdminCommands(bot) {
       if (clients.length === 0) {
         return ctx.reply('📋 Список клиентов пуст');
       }
-      
-      let message = '📋 Список клиентов:\n\n';
-      clients.forEach((client, index) => {
-        const name = client.name || 'Не указано';
-        const phone = client.phone || 'Не указан';
-        const status = (!client.name || !client.phone || client.name.trim() === '' || client.phone.trim() === '') 
-          ? ' ⚠️ (неполные данные)' : '';
-        
-        message += `${index + 1}. ${name}${status}\n`;
-        message += `   📞 ${phone}\n`;
-        message += `   🆔 ID: ${client.telegram_id}\n`;
-        message += `   📅 Добавлен: ${new Date(client.created_at).toLocaleDateString('ru-RU')}\n\n`;
-      });
-      
-      ctx.reply(message);
+
+      // Разбиваем на части по 20 клиентов
+      const chunkSize = 20;
+      const chunks = [];
+      for (let i = 0; i < clients.length; i += chunkSize) {
+        chunks.push(clients.slice(i, i + chunkSize));
+      }
+
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const chunk = chunks[ci];
+        const startIdx = ci * chunkSize;
+        let message = ci === 0
+          ? `📋 Список клиентов (всего: ${clients.length}):\n\n`
+          : `📋 Продолжение (${startIdx + 1}–${startIdx + chunk.length}):\n\n`;
+
+        chunk.forEach((client, index) => {
+          const name = client.name || 'Не указано';
+          const phone = client.phone || 'Не указан';
+          const status = (!client.name || !client.phone || client.name.trim() === '' || client.phone.trim() === '')
+            ? ' ⚠️' : '';
+          message += `${startIdx + index + 1}. ${name}${status}\n`;
+          message += `   📞 ${phone}\n`;
+          message += `   🆔 ${client.telegram_id}\n\n`;
+        });
+
+        await ctx.reply(message);
+      }
       
     } catch (error) {
       console.error('Ошибка получения списка:', error);
-      ctx.reply('❌ Ошибка при получении списка клиентов');
+      ctx.reply('❌ Ошибка при получении списка клиентов: ' + error.message);
     }
   });
   
