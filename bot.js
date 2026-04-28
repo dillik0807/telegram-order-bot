@@ -246,7 +246,7 @@ function formatOrder(orderInfo) {
     message += `📝 Комментарий: ${orderInfo.comment}\n`;
   }
   
-  message += `\n📅 Дата: ${new Date().toLocaleDateString('ru-RU')}`;
+  message += `\n📅 Дата: ${new Date().toLocaleDateString('ru-RU')} ${new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})}`;
   
   return message;
 }
@@ -987,14 +987,31 @@ bot.on('text', async (ctx) => {
 
     // Шаг 7: Номер транспорта
     if (data.step === 'transport') {
+      if (text === '🚫 Отменить заявку') {
+        orderData.delete(userId);
+        const kb = isAdminUser
+          ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
+          : [[{ text: '🏬 Склад' }]];
+        return ctx.reply('❌ Заявка отменена.', { reply_markup: { keyboard: kb, resize_keyboard: true } });
+      }
       data.transport = text;
       data.step = 'comment';
       orderData.set(userId, data);
-      return ctx.reply('📝 Введите комментарий или отправьте "-" чтобы пропустить:');
+      return ctx.reply(
+        '📝 Введите комментарий или отправьте "-" чтобы пропустить:',
+        { reply_markup: { keyboard: [[{ text: '🚫 Отменить заявку' }]], resize_keyboard: true } }
+      );
     }
 
     // Шаг 8: Комментарий
     if (data.step === 'comment') {
+      if (text === '🚫 Отменить заявку') {
+        orderData.delete(userId);
+        const kb = isAdminUser
+          ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
+          : [[{ text: '🏬 Склад' }]];
+        return ctx.reply('❌ Заявка отменена.', { reply_markup: { keyboard: kb, resize_keyboard: true } });
+      }
       data.comment = text === '-' ? '' : text;
       data.step = 'confirm';
       orderData.set(userId, data);
@@ -1179,9 +1196,11 @@ bot.on('text', async (ctx) => {
     // Отмена заявки
     if (text === '❌ Отменить') {
       orderData.delete(userId);
-      ctx.reply('❌ Заявка отменена. Для новой заявки нажмите /start', {
-        reply_markup: { remove_keyboard: true }
-      });
+      const isAdminUser2 = admin.isAdmin(userId);
+      const keyboard = isAdminUser2
+        ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
+        : [[{ text: '🏬 Склад' }]];
+      ctx.reply('❌ Заявка отменена.', { reply_markup: { keyboard, resize_keyboard: true } });
     }
 
   } catch (error) {
@@ -1199,7 +1218,13 @@ bot.on('callback_query', async (ctx) => {
   // Проверка прав доступа
   const isAdminUser = admin.isAdmin(userId);
   
-  if (!isAdminUser) {
+  // Для обычных клиентов разрешаем только их собственные callback (approve/reject не нужны)
+  // Блокируем только admin-specific действия
+  const adminOnlyCallbacks = ['select_client_', 'cash_client_', 'cash_mode_', 'cash_send', 'cash_cancel',
+    'cash_report_close', 'cash_report_excel', 'cash_report_send', 'summary_'];
+  const isAdminCallback = adminOnlyCallbacks.some(prefix => callbackData.startsWith(prefix));
+  
+  if (!isAdminUser && isAdminCallback) {
     return ctx.answerCbQuery('❌ У вас нет прав для этого действия');
   }
   
