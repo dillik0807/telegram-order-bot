@@ -460,25 +460,26 @@ class ExcelExporter {
 
       records.forEach(r => {
         const date = new Date(r.created_at).toLocaleDateString('ru-RU');
+        const year = new Date(r.created_at).getFullYear();
         const usd = parseFloat(r.usd) || 0;
         const somoni = parseFloat(r.somoni) || 0;
         const rate = parseFloat(r.rate) || 0;
         const phone = r.client_phone || '—';
 
         if (r.mode === 'usd') {
-          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
+          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
         } else if (r.mode === 'somoni') {
-          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
+          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
         } else if (r.mode === 'both') {
-          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
-          rows.push({ '№': rowNum++, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
+          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
+          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
         }
       });
 
-      rows.push({ '№': '', 'Дата': '', 'Клиент': 'ИТОГО', 'Телефон': '', 'Сомони': parseFloat(totals.total_somoni), 'Курс $': '', 'Доллар': parseFloat(totals.total_usd) });
+      rows.push({ '№': '', 'Год': '', 'Дата': '', 'Клиент': 'ИТОГО', 'Телефон': '', 'Сомони': parseFloat(totals.total_somoni), 'Курс $': '', 'Доллар': parseFloat(totals.total_usd) });
 
       const worksheet = XLSX.utils.json_to_sheet(rows);
-      worksheet['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 25 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 12 }];
+      worksheet['!cols'] = [{ wch: 5 }, { wch: 8 }, { wch: 12 }, { wch: 25 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 12 }];
 
       const workbook = XLSX.utils.book_new();
       const label = days ? days + '_дней' : 'весь_период';
