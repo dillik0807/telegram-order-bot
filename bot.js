@@ -256,6 +256,9 @@ bot.command('start', async (ctx) => {
   const userId = ctx.from.id;
   const userName = ctx.from.first_name || ctx.from.username || 'Пользователь';
   
+  // Сбрасываем незавершённую заявку
+  orderData.delete(userId);
+  
   // Проверка прав доступа
   const isAdminUser = admin.isAdmin(userId);
   const isClientUser = await database.isClient(userId);
@@ -343,6 +346,8 @@ bot.hears('📦 Создать заявку', async (ctx) => {
   const userId = ctx.from.id;
   if (!admin.isAdmin(userId)) return;
 
+  // Полный сброс — забываем незавершённую заявку
+  orderData.delete(userId);
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
   await reloadWarehousesAndProducts();
 
@@ -367,6 +372,8 @@ bot.hears('🏬 Склад', async (ctx) => {
   const isClientUser = await database.isClient(userId);
   if (!isAdminUser && !isClientUser) return;
 
+  // Полный сброс — забываем незавершённую заявку
+  orderData.delete(userId);
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
   await reloadWarehousesAndProducts();
 
