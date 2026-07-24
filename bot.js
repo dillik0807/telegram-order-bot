@@ -341,51 +341,47 @@ bot.command('start', async (ctx) => {
 // Обработка кнопок для администратора
 bot.hears('📦 Создать заявку', async (ctx) => {
   const userId = ctx.from.id;
-  
-  if (!admin.isAdmin(userId)) {
-    return;
-  }
-  
-  // Начинаем процесс создания заявки
+  if (!admin.isAdmin(userId)) return;
+
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
-  
-  // 🔄 Всегда загружаем свежие данные складов из БД
-  console.log('🔄 Обновление списка складов из БД...');
   await reloadWarehousesAndProducts();
-  
-  const keyboard = getWarehouses().map(w => [{ text: w }]);
-  
-  ctx.reply(
-    '📦 Создание новой заявки\n\n' +
-    '🏬 Выберите склад:',
-    { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-  );
+
+  const warehouses = getWarehouses();
+  const buttons = [];
+  for (let i = 0; i < warehouses.length; i += 2) {
+    const row = [{ text: warehouses[i], callback_data: `wh_${warehouses[i]}` }];
+    if (warehouses[i + 1]) row.push({ text: warehouses[i + 1], callback_data: `wh_${warehouses[i + 1]}` });
+    buttons.push(row);
+  }
+  buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
+
+  ctx.reply('📦 Создание новой заявки\n\n🏬 Выберите склад:', {
+    reply_markup: { inline_keyboard: buttons }
+  });
 });
 
 // Обработка кнопки "🏬 Склад" - начало создания заявки
 bot.hears('🏬 Склад', async (ctx) => {
   const userId = ctx.from.id;
-  
   const isAdminUser = admin.isAdmin(userId);
   const isClientUser = await database.isClient(userId);
-  
-  if (!isAdminUser && !isClientUser) {
-    return;
-  }
-  
-  // Начинаем процесс создания заявки
+  if (!isAdminUser && !isClientUser) return;
+
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
-  
-  // 🔄 Всегда загружаем свежие данные складов из БД
-  console.log('🔄 Обновление списка складов из БД...');
   await reloadWarehousesAndProducts();
-  
-  const keyboard = getWarehouses().map(w => [{ text: w }]);
-  
-  ctx.reply(
-    '🏬 Выберите склад:',
-    { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-  );
+
+  const warehouses = getWarehouses();
+  const buttons = [];
+  for (let i = 0; i < warehouses.length; i += 2) {
+    const row = [{ text: warehouses[i], callback_data: `wh_${warehouses[i]}` }];
+    if (warehouses[i + 1]) row.push({ text: warehouses[i + 1], callback_data: `wh_${warehouses[i + 1]}` });
+    buttons.push(row);
+  }
+  buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
+
+  ctx.reply('🏬 Выберите склад:', {
+    reply_markup: { inline_keyboard: buttons }
+  });
 });
 
 bot.hears('👨‍💼 Панель администратора', async (ctx) => {
@@ -810,120 +806,37 @@ bot.on('text', async (ctx) => {
 
     // Шаг 3: Количество товара
     if (data.step === 'quantity') {
-      // Проверяем, что введено число
       const quantity = text.trim();
       
+      // Блокируем тексты кнопок
+      const forbidden = ['✅ Продолжить', '➕ Добавить еще товар', '✅ Подтвердить', '❌ Отменить', '🏬 Склад', '📦 Создать заявку', '🚫 Отменить заявку'];
+      if (forbidden.includes(text)) {
+        return ctx.reply('⚠️ Введите количество числом (например: 200)');
+      }
+
       data.items = data.items || [];
-      data.items.push({
-        product: data.currentProduct,
-        quantity: quantity + ' шт'  // Автоматически добавляем "шт"
-      });
+      data.items.push({ product: data.currentProduct, quantity: quantity + ' шт' });
       delete data.currentProduct;
-      
-      // Спрашиваем, нужно ли добавить еще товары
       data.step = 'add_more';
       orderData.set(userId, data);
-      
-      const keyboard = [
-        [{ text: '➕ Добавить еще товар' }],
-        [{ text: '✅ Продолжить' }]
-      ];
-      
+
       let message = '✅ Товар добавлен!\n\n';
-      message += `🏬 Склад: ${data.warehouse}\n\n`;
-      message += 'Товары:\n';
-      data.items.forEach((item, i) => {
-        message += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-      });
+      message += `🏬 Склад: ${data.warehouse}\n\nТовары:\n`;
+      data.items.forEach((item, i) => { message += `${i + 1}. ${item.product} — ${item.quantity}\n`; });
       message += '\nЧто дальше?';
-      
+
       return ctx.reply(message, {
-        reply_markup: { keyboard, resize_keyboard: true }
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '➕ Добавить ещё товар', callback_data: 'order_add_more' }],
+            [{ text: '✅ Продолжить', callback_data: 'order_continue' }],
+            [{ text: '🚫 Отменить', callback_data: 'order_cancel' }]
+          ]
+        }
       });
     }
 
-    // Шаг 4: Добавить еще товар или продолжить
-    if (data.step === 'add_more') {
-      if (text === '➕ Добавить еще товар') {
-        data.step = 'product';
-        orderData.set(userId, data);
-        
-        // 🔄 Обновляем товары из БД перед показом
-        console.log('🔄 Обновление списка товаров из БД...');
-        await loadWarehousesAndProducts();
-        
-        const keyboard = getProducts().map(p => [{ text: p }]);
-        
-        return ctx.reply(
-          '🛒 Выберите товар:',
-          { reply_markup: { keyboard, resize_keyboard: true, one_time_keyboard: true } }
-        );
-      }
-      
-      if (text === '✅ Продолжить') {
-        // Для администратора запрашиваем поиск клиента
-        if (isAdminUser) {
-          data.step = 'search_client';
-          orderData.set(userId, data);
-          
-          let summary = '📋 Ваша заявка:\n\n';
-          summary += `🏬 Склад: ${data.warehouse}\n\n`;
-          summary += 'Товары:\n';
-          data.items.forEach((item, i) => {
-            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-          });
-          summary += '\n🔍 Введите имя клиента или часть имени для поиска:\n';
-          summary += '(например: Иван или Ива)';
-          
-          return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-        }
-        
-        // Для обычного клиента - проверяем сохраненные данные
-        const client = await database.getClient(userId);
-        
-        if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
-          // Данные уже есть и заполнены - сразу запрашиваем транспорт
-          data.name = client.name;
-          data.phone = client.phone;
-          data.step = 'transport';
-          orderData.set(userId, data);
-          
-          let summary = '📋 Ваша заявка:\n\n';
-          summary += `👤 Имя: ${client.name}\n`;
-          summary += `📞 Телефон: ${client.phone}\n`;
-          summary += `🏬 Склад: ${data.warehouse}\n\n`;
-          summary += 'Товары:\n';
-          data.items.forEach((item, i) => {
-            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-          });
-          summary += '\n🚚 Введите номер транспорта:\n(например: 1234 AB)';
-          
-          return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-        } else {
-          // Данные не заполнены или клиент новый - запрашиваем имя и телефон
-          data.step = 'name';
-          orderData.set(userId, data);
-          
-          let summary = '📋 Ваша заявка:\n\n';
-          summary += `🏬 Склад: ${data.warehouse}\n\n`;
-          summary += 'Товары:\n';
-          data.items.forEach((item, i) => {
-            summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-          });
-          
-          if (client && client.name && client.name.trim() !== '') {
-            summary += '\n📝 Обновите ваши контактные данные:\n\n';
-            summary += `Ваше текущее имя: ${client.name}\n`;
-            summary += 'Введите новое имя или отправьте "-" чтобы оставить текущее:';
-          } else {
-            summary += '\n📝 Заполните контактные данные:\n\n';
-            summary += 'Введите ваше имя:';
-          }
-          
-          return ctx.reply(summary, { reply_markup: { remove_keyboard: true } });
-        }
-      }
-    }
+    // Шаг 4: add_more теперь обрабатывается через inline кнопки (order_add_more, order_continue)
 
     // Шаг 5: Имя (если первый раз или обновление)
     if (data.step === 'name') {
@@ -1229,6 +1142,113 @@ bot.on('callback_query', async (ctx) => {
   }
   
   try {
+    // ── Отмена заявки через inline ──
+    if (callbackData === 'order_cancel') {
+      orderData.delete(userId);
+      await ctx.answerCbQuery('Отменено');
+      await ctx.editMessageText('❌ Заявка отменена.');
+      const kb = isAdminUser
+        ? [[{ text: '📦 Создать заявку' }], [{ text: '💰 Касса' }], [{ text: '👨‍💼 Панель администратора' }]]
+        : [[{ text: '🏬 Склад' }]];
+      return ctx.reply('Главное меню:', { reply_markup: { keyboard: kb, resize_keyboard: true } });
+    }
+
+    // ── Выбор склада ──
+    if (callbackData.startsWith('wh_')) {
+      const warehouse = callbackData.replace('wh_', '');
+      const data = orderData.get(userId) || { items: [], createdAt: Date.now() };
+      data.warehouse = warehouse;
+      data.step = 'product';
+      orderData.set(userId, data);
+      await ctx.answerCbQuery(`✅ ${warehouse}`);
+
+      await reloadWarehousesAndProducts();
+      const products = getProducts();
+      const buttons = [];
+      for (let i = 0; i < products.length; i += 2) {
+        const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
+        if (products[i + 1]) row.push({ text: products[i + 1], callback_data: `pr_${products[i + 1]}` });
+        buttons.push(row);
+      }
+      buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
+
+      return ctx.editMessageText(`✅ Склад: ${warehouse}\n\n🛒 Выберите товар:`, {
+        reply_markup: { inline_keyboard: buttons }
+      });
+    }
+
+    // ── Выбор товара ──
+    if (callbackData.startsWith('pr_')) {
+      const product = callbackData.replace('pr_', '');
+      const data = orderData.get(userId);
+      if (!data) return ctx.answerCbQuery('❌ Сессия устарела, начните заново');
+      data.currentProduct = product;
+      data.step = 'quantity';
+      orderData.set(userId, data);
+      await ctx.answerCbQuery(`✅ ${product}`);
+      return ctx.editMessageText(
+        `✅ Склад: ${data.warehouse}\n📦 Товар: ${product}\n\n✏️ Введите количество (только число):`,
+        { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } }
+      );
+    }
+
+    // ── Добавить ещё товар или продолжить (inline) ──
+    if (callbackData === 'order_add_more') {
+      const data = orderData.get(userId);
+      if (!data) return ctx.answerCbQuery('❌ Сессия устарела');
+      data.step = 'product';
+      orderData.set(userId, data);
+      await ctx.answerCbQuery();
+
+      await reloadWarehousesAndProducts();
+      const products = getProducts();
+      const buttons = [];
+      for (let i = 0; i < products.length; i += 2) {
+        const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
+        if (products[i + 1]) row.push({ text: products[i + 1], callback_data: `pr_${products[i + 1]}` });
+        buttons.push(row);
+      }
+      buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
+
+      return ctx.editMessageText('🛒 Выберите товар:', {
+        reply_markup: { inline_keyboard: buttons }
+      });
+    }
+
+    if (callbackData === 'order_continue') {
+      const data = orderData.get(userId);
+      if (!data) return ctx.answerCbQuery('❌ Сессия устарела');
+      await ctx.answerCbQuery();
+
+      if (isAdminUser) {
+        data.step = 'search_client';
+        orderData.set(userId, data);
+        let summary = '📋 Заявка:\n\n';
+        summary += `🏬 Склад: ${data.warehouse}\n\nТовары:\n`;
+        data.items.forEach((item, i) => { summary += `${i + 1}. ${item.product} — ${item.quantity}\n`; });
+        summary += '\n🔍 Введите имя клиента для поиска:';
+        return ctx.editMessageText(summary, { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } });
+      }
+
+      // Обычный клиент
+      const client = await database.getClient(userId);
+      if (client && client.name && client.phone && client.name.trim() !== '' && client.phone.trim() !== '') {
+        data.name = client.name;
+        data.phone = client.phone;
+        data.step = 'transport';
+        orderData.set(userId, data);
+        let summary = '📋 Ваша заявка:\n\n';
+        summary += `👤 ${client.name}\n📞 ${client.phone}\n🏬 ${data.warehouse}\n\nТовары:\n`;
+        data.items.forEach((item, i) => { summary += `${i + 1}. ${item.product} — ${item.quantity}\n`; });
+        summary += '\n🚚 Введите номер транспорта:';
+        return ctx.editMessageText(summary, { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } });
+      } else {
+        data.step = 'name';
+        orderData.set(userId, data);
+        return ctx.editMessageText('📝 Введите ваше имя:', { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } });
+      }
+    }
+
     // Обработка выбора клиента
     if (callbackData.startsWith('select_client_')) {
       const clientTelegramId = callbackData.replace('select_client_', '');
