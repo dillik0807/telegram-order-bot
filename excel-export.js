@@ -430,7 +430,7 @@ class ExcelExporter {
       if (days) {
         // Получаем записи за указанный период
         const result = await database.pool.query(`
-          SELECT client_name, client_phone, mode, usd, somoni, rate, created_at
+          SELECT client_name, client_phone, mode, usd, somoni, rate, comment, created_at
           FROM cash_records
           WHERE created_at >= NOW() - INTERVAL '${days} days'
           ORDER BY created_at DESC
@@ -444,7 +444,7 @@ class ExcelExporter {
       } else {
         // Весь период
         const result = await database.pool.query(`
-          SELECT client_name, client_phone, mode, usd, somoni, rate, created_at
+          SELECT client_name, client_phone, mode, usd, somoni, rate, comment, created_at
           FROM cash_records ORDER BY created_at DESC
         `);
         records = result.rows;
@@ -465,21 +465,22 @@ class ExcelExporter {
         const somoni = parseFloat(r.somoni) || 0;
         const rate = parseFloat(r.rate) || 0;
         const phone = r.client_phone || '—';
+        const comment = r.comment || '';
 
         if (r.mode === 'usd') {
-          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
+          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd, 'Комментарий': comment });
         } else if (r.mode === 'somoni') {
-          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
+          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '', 'Комментарий': comment });
         } else if (r.mode === 'both') {
-          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': '', 'Курс $': '', 'Доллар': usd });
-          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '' });
+          rows.push({ '№': rowNum++, 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': usd > 0 ? '' : '', 'Курс $': '', 'Доллар': usd, 'Комментарий': comment });
+          rows.push({ '№': '', 'Год': year, 'Дата': date, 'Клиент': r.client_name || '—', 'Телефон': phone, 'Сомони': somoni, 'Курс $': rate, 'Доллар': rate > 0 ? Math.round(somoni / rate * 100) / 100 : '', 'Комментарий': comment });
         }
       });
 
-      rows.push({ '№': '', 'Год': '', 'Дата': '', 'Клиент': 'ИТОГО', 'Телефон': '', 'Сомони': parseFloat(totals.total_somoni), 'Курс $': '', 'Доллар': parseFloat(totals.total_usd) });
+      rows.push({ '№': '', 'Год': '', 'Дата': '', 'Клиент': 'ИТОГО', 'Телефон': '', 'Сомони': parseFloat(totals.total_somoni), 'Курс $': '', 'Доллар': parseFloat(totals.total_usd), 'Комментарий': '' });
 
       const worksheet = XLSX.utils.json_to_sheet(rows);
-      worksheet['!cols'] = [{ wch: 5 }, { wch: 8 }, { wch: 12 }, { wch: 25 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 12 }];
+      worksheet['!cols'] = [{ wch: 5 }, { wch: 8 }, { wch: 12 }, { wch: 25 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 30 }];
 
       const workbook = XLSX.utils.book_new();
       const label = days ? days + '_дней' : 'весь_период';
