@@ -1,4 +1,4 @@
-const database = require('./database');
+const database = require('./database-wrapper');
 const excelExporter = require('./excel-export');
 const dataManager = require('./data-manager');
 

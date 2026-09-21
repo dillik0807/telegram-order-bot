@@ -1,6 +1,7 @@
 ﻿require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
-const database = require('./database');
+// Автоматический выбор: PostgreSQL если DATABASE_URL задан, иначе SQLite
+const database = require('./database-wrapper');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 const dataManager = require('./data-manager');
@@ -349,9 +350,25 @@ bot.hears('📦 Создать заявку', async (ctx) => {
   // Полный сброс — забываем незавершённую заявку
   orderData.delete(userId);
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
-  await reloadWarehousesAndProducts();
+
+  try {
+    await reloadWarehousesAndProducts();
+  } catch (err) {
+    console.error('❌ Ошибка загрузки складов:', err.message);
+  }
 
   const warehouses = getWarehouses();
+
+  if (!warehouses || warehouses.length === 0) {
+    return ctx.reply(
+      '❌ Не удалось загрузить список складов.\n\n' +
+      'Возможные причины:\n' +
+      '• Нет подключения к базе данных\n' +
+      '• Список складов пуст\n\n' +
+      'Проверьте настройки базы данных или добавьте склады через панель администратора.'
+    );
+  }
+
   const buttons = [];
   for (let i = 0; i < warehouses.length; i += 2) {
     const row = [{ text: warehouses[i], callback_data: `wh_${warehouses[i]}` }];
@@ -375,9 +392,23 @@ bot.hears('🏬 Склад', async (ctx) => {
   // Полный сброс — забываем незавершённую заявку
   orderData.delete(userId);
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
-  await reloadWarehousesAndProducts();
+
+  try {
+    await reloadWarehousesAndProducts();
+  } catch (err) {
+    console.error('❌ Ошибка загрузки складов:', err.message);
+  }
 
   const warehouses = getWarehouses();
+
+  if (!warehouses || warehouses.length === 0) {
+    return ctx.reply(
+      '❌ Не удалось загрузить список складов.\n\n' +
+      'Список складов пуст или база данных недоступна.\n' +
+      'Обратитесь к администратору.'
+    );
+  }
+
   const buttons = [];
   for (let i = 0; i < warehouses.length; i += 2) {
     const row = [{ text: warehouses[i], callback_data: `wh_${warehouses[i]}` }];
@@ -1169,8 +1200,26 @@ bot.on('callback_query', async (ctx) => {
       orderData.set(userId, data);
       await ctx.answerCbQuery(`✅ ${warehouse}`);
 
-      await reloadWarehousesAndProducts();
+      try {
+        await reloadWarehousesAndProducts();
+      } catch (err) {
+        console.error('❌ Ошибка загрузки товаров:', err.message);
+      }
+
       const products = getProducts();
+
+      if (!products || products.length === 0) {
+        orderData.delete(userId);
+        return ctx.editMessageText(
+          '❌ Не удалось загрузить список товаров.\n\n' +
+          'Возможные причины:\n' +
+          '• Нет подключения к базе данных\n' +
+          '• Список товаров пуст\n\n' +
+          'Обратитесь к администратору или попробуйте позже.',
+          { reply_markup: { inline_keyboard: [[{ text: '🔄 Попробовать снова', callback_data: `wh_${warehouse}` }], [{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } }
+        );
+      }
+
       const buttons = [];
       for (let i = 0; i < products.length; i += 2) {
         const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
@@ -1207,8 +1256,21 @@ bot.on('callback_query', async (ctx) => {
       orderData.set(userId, data);
       await ctx.answerCbQuery();
 
-      await reloadWarehousesAndProducts();
+      try {
+        await reloadWarehousesAndProducts();
+      } catch (err) {
+        console.error('❌ Ошибка загрузки товаров:', err.message);
+      }
+
       const products = getProducts();
+
+      if (!products || products.length === 0) {
+        return ctx.editMessageText(
+          '❌ Не удалось загрузить список товаров. Обратитесь к администратору.',
+          { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } }
+        );
+      }
+
       const buttons = [];
       for (let i = 0; i < products.length; i += 2) {
         const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];

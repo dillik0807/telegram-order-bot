@@ -2,7 +2,8 @@
  * Менеджер данных для складов и товаров
  */
 
-const database = require('./database');
+// Автоматический выбор: PostgreSQL если DATABASE_URL задан, иначе SQLite
+const database = require('./database-wrapper');
 
 // Глобальные переменные для хранения данных
 let warehouses = [];
