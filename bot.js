@@ -1130,14 +1130,37 @@ bot.on('text', async (ctx) => {
   }
 });
 
+// Безопасное редактирование сообщения: если Telegram выбрасывает
+// "message is not modified" — просто игнорируем (контент уже актуален).
+// Если редактирование невозможно по другой причине — отправляем новое сообщение,
+// чтобы бот не "молчал" при клике на кнопку.
+async function safeEditMessageText(ctx, text, extra) {
+  try {
+    await ctx.editMessageText(text, extra);
+  } catch (error) {
+    const description = (error && error.description) || (error && error.message) || '';
+    if (description.includes('message is not modified')) {
+      console.log('ℹ️ Сообщение не изменилось, editMessageText пропущен');
+      return;
+    }
+    console.error('⚠️ Не удалось отредактировать сообщение (editMessageText):', description, error);
+    try {
+      await ctx.reply(text, extra);
+    } catch (replyError) {
+      console.error('❌ Не удалось отправить новое сообщение вместо редактирования:', replyError.message || replyError);
+    }
+  }
+}
+
 // Обработка inline-кнопок (callback_query)
 bot.on('callback_query', async (ctx) => {
   const userId = ctx.from.id;
   const callbackData = ctx.callbackQuery.data;
-  
+
   // Проверка прав доступа
   const isAdminUser = admin.isAdmin(userId);
   
+
   // Для обычных клиентов разрешаем только их собственные callback (approve/reject не нужны)
   // Блокируем только admin-specific действия
   const adminOnlyCallbacks = ['select_client_', 'cash_client_', 'cash_mode_', 'cash_send', 'cash_cancel',
@@ -1163,25 +1186,33 @@ bot.on('callback_query', async (ctx) => {
     // ── Выбор склада ──
     if (callbackData.startsWith('wh_')) {
       const warehouse = callbackData.replace('wh_', '');
-      const data = orderData.get(userId) || { items: [], createdAt: Date.now() };
-      data.warehouse = warehouse;
-      data.step = 'product';
-      orderData.set(userId, data);
-      await ctx.answerCbQuery(`✅ ${warehouse}`);
+      // Отвечаем на callback сразу, чтобы избежать таймаута кнопки
+      await ctx.answerCbQuery(`✅ ${warehouse}`).catch(err => console.error('⚠️ answerCbQuery (wh_) failed:', err.message || err));
 
-      await reloadWarehousesAndProducts();
-      const products = getProducts();
-      const buttons = [];
-      for (let i = 0; i < products.length; i += 2) {
-        const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
-        if (products[i + 1]) row.push({ text: products[i + 1], callback_data: `pr_${products[i + 1]}` });
-        buttons.push(row);
+      try {
+        const data = orderData.get(userId) || { items: [], createdAt: Date.now() };
+        data.warehouse = warehouse;
+        data.step = 'product';
+        orderData.set(userId, data);
+
+        await reloadWarehousesAndProducts();
+        const products = getProducts();
+        const buttons = [];
+        for (let i = 0; i < products.length; i += 2) {
+          const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
+          if (products[i + 1]) row.push({ text: products[i + 1], callback_data: `pr_${products[i + 1]}` });
+          buttons.push(row);
+        }
+        buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
+
+        await safeEditMessageText(ctx, `✅ Склад: ${warehouse}\n\n🛒 Выберите товар:`, {
+          reply_markup: { inline_keyboard: buttons }
+        });
+      } catch (whError) {
+        console.error('❌ Ошибка обработки выбора склада (wh_):', whError);
+        await ctx.reply('❌ Не удалось загрузить товары. Попробуйте выбрать склад снова.');
       }
-      buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
-
-      return ctx.editMessageText(`✅ Склад: ${warehouse}\n\n🛒 Выберите товар:`, {
-        reply_markup: { inline_keyboard: buttons }
-      });
+      return;
     }
 
     // ── Выбор товара ──
@@ -1192,11 +1223,19 @@ bot.on('callback_query', async (ctx) => {
       data.currentProduct = product;
       data.step = 'quantity';
       orderData.set(userId, data);
-      await ctx.answerCbQuery(`✅ ${product}`);
-      return ctx.editMessageText(
-        `✅ Склад: ${data.warehouse}\n📦 Товар: ${product}\n\n✏️ Введите количество (только число):`,
-        { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } }
-      );
+      // Отвечаем на callback сразу, чтобы избежать таймаута кнопки
+      await ctx.answerCbQuery(`✅ ${product}`).catch(err => console.error('⚠️ answerCbQuery (pr_) failed:', err.message || err));
+
+      try {
+        await safeEditMessageText(
+          ctx,
+          `✅ Склад: ${data.warehouse}\n📦 Товар: ${product}\n\n✏️ Введите количество (только число):`,
+          { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } }
+        );
+      } catch (prError) {
+        console.error('❌ Ошибка обработки выбора товара (pr_):', prError);
+      }
+      return;
     }
 
     // ── Добавить ещё товар или продолжить (inline) ──
@@ -1205,22 +1244,31 @@ bot.on('callback_query', async (ctx) => {
       if (!data) return ctx.answerCbQuery('❌ Сессия устарела');
       data.step = 'product';
       orderData.set(userId, data);
-      await ctx.answerCbQuery();
+      // Отвечаем на callback сразу, чтобы избежать таймаута кнопки
+      await ctx.answerCbQuery().catch(err => console.error('⚠️ answerCbQuery (order_add_more) failed:', err.message || err));
 
-      await reloadWarehousesAndProducts();
-      const products = getProducts();
-      const buttons = [];
-      for (let i = 0; i < products.length; i += 2) {
-        const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
-        if (products[i + 1]) row.push({ text: products[i + 1], callback_data: `pr_${products[i + 1]}` });
-        buttons.push(row);
+      try {
+        await reloadWarehousesAndProducts();
+        const products = getProducts();
+        const buttons = [];
+        for (let i = 0; i < products.length; i += 2) {
+          const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
+          if (products[i + 1]) row.push({ text: products[i + 1], callback_data: `pr_${products[i + 1]}` });
+          buttons.push(row);
+        }
+        buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
+
+        await safeEditMessageText(ctx, '🛒 Выберите товар:', {
+          reply_markup: { inline_keyboard: buttons }
+        });
+      } catch (addMoreError) {
+        console.error('❌ Ошибка обработки order_add_more:', addMoreError);
+        await ctx.reply('❌ Не удалось загрузить товары. Попробуйте снова.');
       }
-      buttons.push([{ text: '🚫 Отменить', callback_data: 'order_cancel' }]);
-
-      return ctx.editMessageText('🛒 Выберите товар:', {
-        reply_markup: { inline_keyboard: buttons }
-      });
+      return;
     }
+
+
 
     if (callbackData === 'order_continue') {
       const data = orderData.get(userId);
@@ -1260,55 +1308,64 @@ bot.on('callback_query', async (ctx) => {
     if (callbackData.startsWith('select_client_')) {
       const clientTelegramId = callbackData.replace('select_client_', '');
       const data = orderData.get(userId);
-      
+
       console.log('🔍 Поиск клиента с telegram_id:', clientTelegramId);
-      
+
       if (!data || data.step !== 'select_client' || !data.clientsList) {
         console.log('❌ Данные заявки не найдены');
         return ctx.answerCbQuery('❌ Ошибка: данные заявки не найдены');
       }
-      
+
       console.log('📋 Список клиентов:', data.clientsList.map(c => ({ id: c.telegram_id, name: c.name })));
-      
+
       // Ищем выбранного клиента в списке (сравниваем как строки)
-      const selectedClient = data.clientsList.find(client => 
+      const selectedClient = data.clientsList.find(client =>
         String(client.telegram_id) === String(clientTelegramId)
       );
-      
+
       if (!selectedClient) {
         console.log('❌ Клиент не найден в списке');
         return ctx.answerCbQuery('❌ Клиент не найден');
       }
-      
+
       console.log('✅ Клиент найден:', selectedClient.name);
-      
+
       // Сохраняем данные выбранного клиента
       data.selectedClient = selectedClient;
       data.name = selectedClient.name;
       data.phone = selectedClient.phone;
       data.step = 'transport';
       orderData.set(userId, data);
-      
-      // Отвечаем на callback
-      await ctx.answerCbQuery(`✅ Выбран клиент: ${selectedClient.name}`);
-      
-      // Редактируем сообщение, убирая кнопки
-      let summary = '📋 Ваша заявка:\n\n';
-      summary += `👤 Клиент: ${selectedClient.name}\n`;
-      summary += `📞 Телефон: ${selectedClient.phone}\n`;
-      summary += `🏬 Склад: ${data.warehouse}\n\n`;
-      summary += 'Товары:\n';
-      data.items.forEach((item, i) => {
-        summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
-      });
-      
-      await ctx.editMessageText(summary);
-      
-      // Отправляем новое сообщение с запросом номера транспорта
-      await ctx.reply('🚚 Введите номер транспорта:\n(например: 1234 AB)', {
-        reply_markup: { remove_keyboard: true }
-      });
+
+      // Отвечаем на callback сразу, чтобы избежать таймаута кнопки
+      await ctx.answerCbQuery(`✅ Выбран клиент: ${selectedClient.name}`)
+        .catch(err => console.error('⚠️ answerCbQuery (select_client_) failed:', err.message || err));
+
+      try {
+        // Редактируем сообщение, убирая кнопки
+        let summary = '📋 Ваша заявка:\n\n';
+        summary += `👤 Клиент: ${selectedClient.name}\n`;
+        summary += `📞 Телефон: ${selectedClient.phone}\n`;
+        summary += `🏬 Склад: ${data.warehouse}\n\n`;
+        summary += 'Товары:\n';
+        data.items.forEach((item, i) => {
+          summary += `${i + 1}. ${item.product} — ${item.quantity}\n`;
+        });
+
+        await safeEditMessageText(ctx, summary);
+
+        // Отправляем новое сообщение с запросом номера транспорта
+        await ctx.reply('🚚 Введите номер транспорта:\n(например: 1234 AB)', {
+          reply_markup: { remove_keyboard: true }
+        });
+      } catch (selectClientError) {
+        console.error('❌ Ошибка обработки select_client_:', selectClientError);
+        await ctx.reply('❌ Произошла ошибка. Попробуйте выбрать клиента снова.');
+      }
+      return;
     }
+
+
 
     // ── Касса: выбор клиента ──
     if (callbackData.startsWith('cash_client_')) {
@@ -1600,8 +1657,11 @@ bot.on('callback_query', async (ctx) => {
     }
 
   } catch (error) {
-    console.error('Ошибка обработки callback:', error);
-    ctx.answerCbQuery('❌ Произошла ошибка');
+    console.error(`Ошибка обработки callback "${callbackData}" от пользователя ${userId}:`, error);
+    // Гарантируем, что кнопка не "зависнет" в состоянии загрузки у клиента
+    await ctx.answerCbQuery('❌ Произошла ошибка').catch(cbError => {
+      console.error('⚠️ Не удалось ответить на callback после ошибки:', cbError.message || cbError);
+    });
   }
 });
 
