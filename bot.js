@@ -1,7 +1,6 @@
 ﻿require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
-// Автоматический выбор: PostgreSQL если DATABASE_URL задан, иначе SQLite
-const database = require('./database-wrapper');
+const database = require('./database');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 const dataManager = require('./data-manager');
@@ -350,25 +349,9 @@ bot.hears('📦 Создать заявку', async (ctx) => {
   // Полный сброс — забываем незавершённую заявку
   orderData.delete(userId);
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
-
-  try {
-    await reloadWarehousesAndProducts();
-  } catch (err) {
-    console.error('❌ Ошибка загрузки складов:', err.message);
-  }
+  await reloadWarehousesAndProducts();
 
   const warehouses = getWarehouses();
-
-  if (!warehouses || warehouses.length === 0) {
-    return ctx.reply(
-      '❌ Не удалось загрузить список складов.\n\n' +
-      'Возможные причины:\n' +
-      '• Нет подключения к базе данных\n' +
-      '• Список складов пуст\n\n' +
-      'Проверьте настройки базы данных или добавьте склады через панель администратора.'
-    );
-  }
-
   const buttons = [];
   for (let i = 0; i < warehouses.length; i += 2) {
     const row = [{ text: warehouses[i], callback_data: `wh_${warehouses[i]}` }];
@@ -392,23 +375,9 @@ bot.hears('🏬 Склад', async (ctx) => {
   // Полный сброс — забываем незавершённую заявку
   orderData.delete(userId);
   orderData.set(userId, { items: [], step: 'warehouse', createdAt: Date.now() });
-
-  try {
-    await reloadWarehousesAndProducts();
-  } catch (err) {
-    console.error('❌ Ошибка загрузки складов:', err.message);
-  }
+  await reloadWarehousesAndProducts();
 
   const warehouses = getWarehouses();
-
-  if (!warehouses || warehouses.length === 0) {
-    return ctx.reply(
-      '❌ Не удалось загрузить список складов.\n\n' +
-      'Список складов пуст или база данных недоступна.\n' +
-      'Обратитесь к администратору.'
-    );
-  }
-
   const buttons = [];
   for (let i = 0; i < warehouses.length; i += 2) {
     const row = [{ text: warehouses[i], callback_data: `wh_${warehouses[i]}` }];
@@ -1200,26 +1169,8 @@ bot.on('callback_query', async (ctx) => {
       orderData.set(userId, data);
       await ctx.answerCbQuery(`✅ ${warehouse}`);
 
-      try {
-        await reloadWarehousesAndProducts();
-      } catch (err) {
-        console.error('❌ Ошибка загрузки товаров:', err.message);
-      }
-
+      await reloadWarehousesAndProducts();
       const products = getProducts();
-
-      if (!products || products.length === 0) {
-        orderData.delete(userId);
-        return ctx.editMessageText(
-          '❌ Не удалось загрузить список товаров.\n\n' +
-          'Возможные причины:\n' +
-          '• Нет подключения к базе данных\n' +
-          '• Список товаров пуст\n\n' +
-          'Обратитесь к администратору или попробуйте позже.',
-          { reply_markup: { inline_keyboard: [[{ text: '🔄 Попробовать снова', callback_data: `wh_${warehouse}` }], [{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } }
-        );
-      }
-
       const buttons = [];
       for (let i = 0; i < products.length; i += 2) {
         const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
@@ -1256,21 +1207,8 @@ bot.on('callback_query', async (ctx) => {
       orderData.set(userId, data);
       await ctx.answerCbQuery();
 
-      try {
-        await reloadWarehousesAndProducts();
-      } catch (err) {
-        console.error('❌ Ошибка загрузки товаров:', err.message);
-      }
-
+      await reloadWarehousesAndProducts();
       const products = getProducts();
-
-      if (!products || products.length === 0) {
-        return ctx.editMessageText(
-          '❌ Не удалось загрузить список товаров. Обратитесь к администратору.',
-          { reply_markup: { inline_keyboard: [[{ text: '🚫 Отменить', callback_data: 'order_cancel' }]] } }
-        );
-      }
-
       const buttons = [];
       for (let i = 0; i < products.length; i += 2) {
         const row = [{ text: products[i], callback_data: `pr_${products[i]}` }];
@@ -1790,39 +1728,42 @@ async function startBot() {
     console.log(`📱 GREEN_API_INSTANCE_ID: ${process.env.GREEN_API_INSTANCE_ID ? '✅ задан' : '❌ не задан'}`);
     console.log(`📱 GREEN_API_TOKEN: ${process.env.GREEN_API_TOKEN ? '✅ задан' : '❌ не задан'}`);
     console.log(`💬 TELEGRAM_GROUP_ID: ${process.env.TELEGRAM_GROUP_ID ? '✅ задан' : '❌ не задан'}`);
-
+    
     if (!process.env.TELEGRAM_BOT_TOKEN) {
       console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_BOT_TOKEN не задан!');
+      console.error('💡 Добавьте переменную окружения TELEGRAM_BOT_TOKEN в Railway');
       process.exit(1);
     }
-
+    
     // Выполняем автоматическую миграцию перед запуском
     await autoMigrate();
-
-    const PORT = parseInt(process.env.PORT) || 3000;
-
-    // ── Всегда polling — надёжнее для Railway ────────────────────────────
-    // Сначала удаляем старый webhook если был
-    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
-    console.log('🔄 Запуск в polling режиме...');
-    await bot.launch({
-      allowedUpdates: ['message', 'callback_query', 'inline_query', 'chosen_inline_result', 'edited_message']
-    });
-    console.log('🤖 Бот запущен в polling режиме!');
-
-    // Простой HTTP сервер чтобы Railway не завершал контейнер
-    const http = require('http');
-    http.createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', uptime: Math.floor(process.uptime()) }));
-    }).listen(PORT, () => {
-      console.log(`✅ Keep-alive сервер на порту ${PORT}`);
-    });
-
+    
+    const PORT = process.env.PORT || 3000;
+    const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN;
+    
+    if (WEBHOOK_DOMAIN) {
+      // Webhook режим для Railway/production
+      const domain = WEBHOOK_DOMAIN.startsWith('https://') ? WEBHOOK_DOMAIN : `https://${WEBHOOK_DOMAIN}`;
+      console.log(`🌐 Запуск в webhook режиме: ${domain}, порт: ${PORT}`);
+      
+      await bot.launch({
+        webhook: {
+          domain: domain,
+          port: PORT
+        }
+      });
+      
+      console.log('🤖 Бот запущен в webhook режиме!');
+    } else {
+      // Polling режим для локальной разработки
+      console.log('🔄 Запуск в polling режиме (локальная разработка)...');
+      await bot.launch();
+      console.log('🤖 Бот запущен в polling режиме!');
+    }
+    
     const botInfo = await bot.telegram.getMe();
     console.log('📱 Telegram: @' + botInfo.username);
     console.log('✅ Бот готов к работе!');
-
   } catch (error) {
     console.error('❌ Ошибка запуска бота:', error);
     process.exit(1);

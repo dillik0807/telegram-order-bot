@@ -187,12 +187,7 @@ class Database {
 
       console.log('✅ Таблицы PostgreSQL инициализированы');
     } catch (error) {
-      // Тихо — при локальном запуске railway.internal недоступен, wrapper переключит на SQLite
-      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED' || String(error.message).includes('railway.internal')) {
-        console.log('⚠️  PostgreSQL (railway.internal) недоступен локально — используется SQLite');
-      } else {
-        console.error('❌ Ошибка инициализации таблиц:', error.message);
-      }
+      console.error('❌ Ошибка инициализации таблиц:', error);
     }
   }
 
