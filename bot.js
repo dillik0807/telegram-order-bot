@@ -1800,45 +1800,24 @@ async function startBot() {
     await autoMigrate();
 
     const PORT = parseInt(process.env.PORT) || 3000;
-    const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN;
 
-    if (WEBHOOK_DOMAIN) {
-      // ── Webhook режим (Railway / production) ──────────────────────────────
-      const domain = WEBHOOK_DOMAIN.startsWith('https://') ? WEBHOOK_DOMAIN : `https://${WEBHOOK_DOMAIN}`;
-      const webhookPath = `/telegraf/${bot.secretPathComponent()}`;
+    // ── Всегда polling — надёжнее для Railway ────────────────────────────
+    // Сначала удаляем старый webhook если был
+    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
+    console.log('🔄 Запуск в polling режиме...');
+    await bot.launch({
+      allowedUpdates: ['message', 'callback_query', 'inline_query', 'chosen_inline_result', 'edited_message']
+    });
+    console.log('🤖 Бот запущен в polling режиме!');
 
-      console.log(`🌐 Запуск в webhook режиме: ${domain}, порт: ${PORT}`);
-
-      const http = require('http');
-
-      // Сначала получаем callback от Telegraf
-      const webhookHandler = await bot.createWebhook({
-        domain,
-        path: webhookPath,
-        allowedUpdates: ['message', 'callback_query', 'inline_query', 'chosen_inline_result', 'edited_message']
-      });
-
-      // Создаём сервер: /health отвечаем сами, остальное — Telegraf
-      const server = http.createServer((req, res) => {
-        if (req.url === '/health' || req.url === '/') {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', uptime: Math.floor(process.uptime()) }));
-          return;
-        }
-        webhookHandler(req, res);
-      });
-
-      server.listen(PORT, () => {
-        console.log(`✅ HTTP сервер запущен на порту ${PORT}`);
-        console.log(`🤖 Бот запущен в webhook режиме!`);
-      });
-
-    } else {
-      // ── Polling режим (локальная разработка) ─────────────────────────────
-      console.log('🔄 Запуск в polling режиме (локальная разработка)...');
-      await bot.launch();
-      console.log('🤖 Бот запущен в polling режиме!');
-    }
+    // Простой HTTP сервер чтобы Railway не завершал контейнер
+    const http = require('http');
+    http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', uptime: Math.floor(process.uptime()) }));
+    }).listen(PORT, () => {
+      console.log(`✅ Keep-alive сервер на порту ${PORT}`);
+    });
 
     const botInfo = await bot.telegram.getMe();
     console.log('📱 Telegram: @' + botInfo.username);
