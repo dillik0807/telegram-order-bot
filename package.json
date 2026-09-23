@@ -1,6 +1,6 @@
 {
   "name": "telegram-order-bot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Telegram bot для приема заявок с отправкой в WhatsApp",
   "main": "bot.js",
   "scripts": {
