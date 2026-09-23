@@ -1812,7 +1812,11 @@ async function startBot() {
       const http = require('http');
 
       // Сначала получаем callback от Telegraf
-      const webhookHandler = await bot.createWebhook({ domain, path: webhookPath });
+      const webhookHandler = await bot.createWebhook({
+        domain,
+        path: webhookPath,
+        allowedUpdates: ['message', 'callback_query', 'inline_query', 'chosen_inline_result', 'edited_message']
+      });
 
       // Создаём сервер: /health отвечаем сами, остальное — Telegraf
       const server = http.createServer((req, res) => {
