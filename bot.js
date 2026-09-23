@@ -1812,18 +1812,25 @@ async function startBot() {
       // Поднимаем собственный HTTP-сервер через http (без Express)
       // чтобы обслуживать и webhook Telegraf и /health для Railway
       const http = require('http');
-      const webhookCallback = await bot.createWebhook({ domain, path: webhookPath });
 
       const server = http.createServer(async (req, res) => {
+        // Health-check — ПЕРВЫМ, до Telegraf
         if (req.url === '/health' || req.url === '/') {
-          // Health-check endpoint — Railway проверяет что сервис жив
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', bot: '@dillik0807_bot', uptime: process.uptime() }));
+          res.end(JSON.stringify({ status: 'ok', uptime: Math.floor(process.uptime()) }));
           return;
         }
-        // Все остальные запросы передаём Telegraf webhook-обработчику
-        await webhookCallback(req, res);
+        // Webhook Telegraf — всё остальное
+        if (req.url.startsWith('/telegraf')) {
+          await webhookHandler(req, res);
+          return;
+        }
+        res.writeHead(404);
+        res.end('Not found');
       });
+
+      // Регистрируем webhook у Telegram и получаем обработчик
+      const webhookHandler = await bot.createWebhook({ domain, path: webhookPath });
 
       server.listen(PORT, () => {
         console.log(`✅ HTTP сервер запущен на порту ${PORT}`);
