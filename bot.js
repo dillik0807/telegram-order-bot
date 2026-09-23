@@ -1790,42 +1790,57 @@ async function startBot() {
     console.log(`📱 GREEN_API_INSTANCE_ID: ${process.env.GREEN_API_INSTANCE_ID ? '✅ задан' : '❌ не задан'}`);
     console.log(`📱 GREEN_API_TOKEN: ${process.env.GREEN_API_TOKEN ? '✅ задан' : '❌ не задан'}`);
     console.log(`💬 TELEGRAM_GROUP_ID: ${process.env.TELEGRAM_GROUP_ID ? '✅ задан' : '❌ не задан'}`);
-    
+
     if (!process.env.TELEGRAM_BOT_TOKEN) {
       console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_BOT_TOKEN не задан!');
-      console.error('💡 Добавьте переменную окружения TELEGRAM_BOT_TOKEN в Railway');
       process.exit(1);
     }
-    
+
     // Выполняем автоматическую миграцию перед запуском
     await autoMigrate();
-    
-    const PORT = process.env.PORT || 3000;
+
+    const PORT = parseInt(process.env.PORT) || 3000;
     const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN;
-    
+
     if (WEBHOOK_DOMAIN) {
-      // Webhook режим для Railway/production
+      // ── Webhook режим (Railway / production) ──────────────────────────────
       const domain = WEBHOOK_DOMAIN.startsWith('https://') ? WEBHOOK_DOMAIN : `https://${WEBHOOK_DOMAIN}`;
+      const webhookPath = `/telegraf/${bot.secretPathComponent()}`;
+
       console.log(`🌐 Запуск в webhook режиме: ${domain}, порт: ${PORT}`);
-      
-      await bot.launch({
-        webhook: {
-          domain: domain,
-          port: PORT
+
+      // Поднимаем собственный HTTP-сервер через http (без Express)
+      // чтобы обслуживать и webhook Telegraf и /health для Railway
+      const http = require('http');
+      const webhookCallback = await bot.createWebhook({ domain, path: webhookPath });
+
+      const server = http.createServer(async (req, res) => {
+        if (req.url === '/health' || req.url === '/') {
+          // Health-check endpoint — Railway проверяет что сервис жив
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', bot: '@dillik0807_bot', uptime: process.uptime() }));
+          return;
         }
+        // Все остальные запросы передаём Telegraf webhook-обработчику
+        await webhookCallback(req, res);
       });
-      
-      console.log('🤖 Бот запущен в webhook режиме!');
+
+      server.listen(PORT, () => {
+        console.log(`✅ HTTP сервер запущен на порту ${PORT}`);
+        console.log(`🤖 Бот запущен в webhook режиме!`);
+      });
+
     } else {
-      // Polling режим для локальной разработки
+      // ── Polling режим (локальная разработка) ─────────────────────────────
       console.log('🔄 Запуск в polling режиме (локальная разработка)...');
       await bot.launch();
       console.log('🤖 Бот запущен в polling режиме!');
     }
-    
+
     const botInfo = await bot.telegram.getMe();
     console.log('📱 Telegram: @' + botInfo.username);
     console.log('✅ Бот готов к работе!');
+
   } catch (error) {
     console.error('❌ Ошибка запуска бота:', error);
     process.exit(1);
