@@ -1,150 +1,158 @@
+/**
+ * WhatsApp отправка через Whapi.cloud
+ * Документация: https://whapi.cloud/docs
+ *
+ * POST https://gate.whapi.cloud/messages/text
+ * Headers: { Authorization: "Bearer <token>" }
+ * Body: { to: "<chatId>", body: "<text>" }
+ *
+ * chatId для личного номера: "992XXXXXXXXX" (без +, без @)
+ * chatId для группы:        "120363XXXXXXXXXX@g.us"
+ */
+
 const axios = require('axios');
 
-// Отправка сообщения через Green-API
-async function sendMessage(message, recipient = null, customInstanceId = null, customToken = null) {
-  // Используем кастомные настройки или настройки по умолчанию
-  const idInstance = customInstanceId || process.env.GREEN_API_INSTANCE_ID;
-  const apiTokenInstance = customToken || process.env.GREEN_API_TOKEN;
-  const defaultRecipient = process.env.WHATSAPP_RECIPIENT;
-  
-  // Используем переданный номер или номер по умолчанию
-  const phoneNumber = recipient || defaultRecipient;
-  
-  if (!idInstance || !apiTokenInstance) {
-    console.log('⚠️ Green-API не настроен (отсутствуют idInstance или apiToken)');
+const WHAPI_URL = process.env.WHAPI_URL || 'https://gate.whapi.cloud';
+const WHAPI_TOKEN = process.env.WHAPI_TOKEN;
+
+// ── Отправка личному номеру ───────────────────────────────────────────────────
+async function sendMessage(message, recipient = null, _unused1 = null, _unused2 = null) {
+  const token = WHAPI_TOKEN;
+  const phone = recipient || process.env.WHATSAPP_RECIPIENT;
+
+  if (!token) {
+    console.log('⚠️ WHAPI_TOKEN не задан');
     return false;
   }
-  
-  if (!phoneNumber) {
+  if (!phone) {
     console.log('⚠️ Номер получателя WhatsApp не указан');
     return false;
   }
-  
+
+  // Убираем + и пробелы, оставляем только цифры
+  const chatId = String(phone).replace(/[^\d]/g, '');
+
   try {
-    const url = `https://api.green-api.com/waInstance${idInstance}/sendMessage/${apiTokenInstance}`;
-    
-    const data = {
-      chatId: phoneNumber + '@c.us', // Формат для личного чата
-      message: message
-    };
-    
-    console.log(`📤 Отправка в WhatsApp на номер ${phoneNumber} через Green-API (Instance: ${idInstance})...`);
-    
-    const response = await axios.post(url, data, {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 15000 // 15 секунд
-    });
-    
-    if (response.data && response.data.idMessage) {
-      console.log('✅ Сообщение отправлено в WhatsApp!');
-      console.log('📨 ID сообщения:', response.data.idMessage);
+    console.log(`📤 Отправка в WhatsApp на номер ${chatId} через Whapi.cloud...`);
+
+    const response = await axios.post(
+      `${WHAPI_URL}/messages/text`,
+      { to: chatId, body: message },
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
+    if (response.data && response.data.sent) {
+      console.log('✅ Сообщение отправлено в WhatsApp!', response.data.id || '');
       return true;
     } else {
-      console.log('⚠️ Неожиданный ответ от Green-API:', response.data);
+      console.log('⚠️ Неожиданный ответ от Whapi:', JSON.stringify(response.data));
       return false;
     }
-    
+
   } catch (error) {
     console.error('❌ Ошибка отправки в WhatsApp:', error.response?.data || error.message);
     return false;
   }
 }
 
-// Отправка в WhatsApp группу через Green-API
-async function sendToGroup(message, groupId, customInstanceId = null, customToken = null) {
-  // Используем кастомные настройки или настройки по умолчанию
-  const idInstance = customInstanceId || process.env.GREEN_API_INSTANCE_ID;
-  const apiTokenInstance = customToken || process.env.GREEN_API_TOKEN;
-  
-  if (!idInstance || !apiTokenInstance) {
-    console.log('⚠️ Green-API не настроен');
+// ── Отправка в группу ─────────────────────────────────────────────────────────
+async function sendToGroup(message, groupId, _unused1 = null, _unused2 = null) {
+  const token = WHAPI_TOKEN;
+
+  if (!token) {
+    console.log('⚠️ WHAPI_TOKEN не задан');
     return false;
   }
-  
   if (!groupId) {
     console.log('⚠️ ID группы WhatsApp не указан');
     return false;
   }
-  
+
+  // groupId уже в формате 120363XXXXXXXXXX@g.us
+  const chatId = groupId;
+
   try {
-    const url = `https://api.green-api.com/waInstance${idInstance}/sendMessage/${apiTokenInstance}`;
-    
-    const data = {
-      chatId: groupId, // ID группы в формате 120363XXXXXXXXXX@g.us
-      message: message
-    };
-    
-    console.log(`📤 Отправка в WhatsApp группу через Green-API (Instance: ${idInstance})...`);
-    
-    const response = await axios.post(url, data, {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 15000 // 15 секунд
-    });
-    
-    if (response.data && response.data.idMessage) {
-      console.log('✅ Сообщение отправлено в WhatsApp группу!');
-      console.log('📨 ID сообщения:', response.data.idMessage);
+    console.log(`📤 Отправка в WhatsApp группу ${chatId} через Whapi.cloud...`);
+
+    const response = await axios.post(
+      `${WHAPI_URL}/messages/text`,
+      { to: chatId, body: message },
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
+    if (response.data && response.data.sent) {
+      console.log('✅ Сообщение отправлено в WhatsApp группу!', response.data.id || '');
       return true;
     } else {
-      console.log('⚠️ Неожиданный ответ от Green-API:', response.data);
+      console.log('⚠️ Неожиданный ответ от Whapi:', JSON.stringify(response.data));
       return false;
     }
-    
+
   } catch (error) {
     console.error('❌ Ошибка отправки в WhatsApp группу:', error.response?.data || error.message);
     return false;
   }
 }
 
-module.exports = {
-  sendMessage,
-  sendToGroup,
-  sendFile
-};
+// ── Отправка файла ────────────────────────────────────────────────────────────
+async function sendFile(filePath, fileName, caption, recipient, _unused1 = null, _unused2 = null) {
+  const token = WHAPI_TOKEN;
+  const phone = recipient || process.env.WHATSAPP_RECIPIENT;
 
-async function sendFile(filePath, fileName, caption, recipient, customInstanceId = null, customToken = null) {
-  const idInstance = customInstanceId || process.env.GREEN_API_INSTANCE_ID;
-  const apiTokenInstance = customToken || process.env.GREEN_API_TOKEN;
-  const phoneNumber = recipient || process.env.WHATSAPP_RECIPIENT;
-
-  if (!idInstance || !apiTokenInstance || !phoneNumber) {
-    console.log('⚠️ Green-API не настроен для отправки файла');
+  if (!token || !phone) {
+    console.log('⚠️ Whapi не настроен для отправки файла');
     return false;
   }
+
+  const chatId = String(phone).replace(/[^\d@.]/g, '');
 
   try {
     const fs = require('fs');
     const FormData = require('form-data');
 
-    const url = `https://api.green-api.com/waInstance${idInstance}/sendFileByUpload/${apiTokenInstance}`;
-
     const form = new FormData();
-    form.append('chatId', phoneNumber + '@c.us');
-    form.append('file', fs.createReadStream(filePath), { filename: fileName });
-    form.append('fileName', fileName);
+    form.append('to', chatId);
+    form.append('media', fs.createReadStream(filePath), { filename: fileName });
     if (caption) form.append('caption', caption);
 
-    console.log(`📎 Отправка файла ${fileName} в WhatsApp (Instance: ${idInstance})...`);
+    console.log(`📎 Отправка файла ${fileName} в WhatsApp через Whapi.cloud...`);
 
-    const axios = require('axios');
-    const response = await axios.post(url, form, {
-      headers: form.getHeaders(),
-      timeout: 30000
-    });
+    const response = await axios.post(
+      `${WHAPI_URL}/messages/document`,
+      form,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          ...form.getHeaders()
+        },
+        timeout: 30000
+      }
+    );
 
-    if (response.data && response.data.idMessage) {
+    if (response.data && response.data.sent) {
       console.log('✅ Файл отправлен в WhatsApp!');
       return true;
     } else {
-      console.log('⚠️ Неожиданный ответ:', response.data);
+      console.log('⚠️ Неожиданный ответ:', JSON.stringify(response.data));
       return false;
     }
+
   } catch (error) {
     console.error('❌ Ошибка отправки файла в WhatsApp:', error.response?.data || error.message);
     return false;
   }
 }
+
+module.exports = { sendMessage, sendToGroup, sendFile };
