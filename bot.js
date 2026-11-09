@@ -5,6 +5,7 @@ const database = require('./database-wrapper');
 const whatsapp = require('./whatsapp');
 const admin = require('./admin');
 const dataManager = require('./data-manager');
+const cashAccess = require('./cash-access');
 
 // 🔧 Автоматическая миграция PostgreSQL при запуске
 async function autoMigrate() {
@@ -280,7 +281,7 @@ bot.command('start', async (ctx) => {
   
   if (isClientUser) {
     // Проверяем есть ли доступ к кассе
-    const hasCash = await database.hasCashAccess(userId);
+    const hasCash = await cashAccess.hasCashAccess(userId);
     const keyboard = [
       [{ text: '🏬 Склад' }]
     ];
@@ -483,7 +484,7 @@ bot.hears('🔑 Доступ к кассе', async (ctx) => {
   const userId = ctx.from.id;
   if (!admin.isAdmin(userId)) return;
 
-  const clients = await database.getClientsWithCashAccess();
+  const clients = await cashAccess.getClientsWithCashAccess();
 
   let msg = '🔑 Доступ к кассе\n\n';
 
@@ -509,7 +510,7 @@ bot.hears('📊 Мои записи кассы', async (ctx) => {
   const userId = ctx.from.id;
   const isAdminUser = admin.isAdmin(userId);
   const isClientUser = await database.isClient(userId);
-  const hasCash = isAdminUser || (isClientUser && await database.hasCashAccess(userId));
+  const hasCash = isAdminUser || (isClientUser && await cashAccess.hasCashAccess(userId));
   
   if (!hasCash) return;
 
@@ -517,10 +518,10 @@ bot.hears('📊 Мои записи кассы', async (ctx) => {
     // Клиент видит только свои записи, админ — все
     const records = isAdminUser
       ? await database.getCashReport()
-      : await database.getCashReportByCreator(userId);
+      : await cashAccess.getCashReportByCreator(userId);
     const totals = isAdminUser
       ? await database.getCashTotals()
-      : await database.getCashTotalsByCreator(userId);
+      : await cashAccess.getCashTotalsByCreator(userId);
 
     let msg = isAdminUser ? '📊 Отчёт кассы\n\n' : '📊 Мои записи кассы\n\n';
 
@@ -567,7 +568,7 @@ bot.command('grant_cash', async (ctx) => {
     return ctx.reply('⚠️ Неверный ID. Использование: /grant_cash <Telegram ID>');
   }
 
-  const granted = await database.grantCashAccess(targetId);
+  const granted = await cashAccess.grantCashAccess(targetId);
   if (granted) {
     ctx.reply(`✅ Доступ к кассе выдан для клиента ID: ${targetId}\n\nКлиент увидит кнопку "💰 Касса" после /start`);
   } else {
@@ -589,7 +590,7 @@ bot.command('revoke_cash', async (ctx) => {
     return ctx.reply('⚠️ Неверный ID. Использование: /revoke_cash <Telegram ID>');
   }
 
-  const revoked = await database.revokeCashAccess(targetId);
+  const revoked = await cashAccess.revokeCashAccess(targetId);
   if (revoked) {
     ctx.reply(`✅ Доступ к кассе забран у клиента ID: ${targetId}`);
   } else {
@@ -605,7 +606,7 @@ bot.hears('💰 Касса', async (ctx) => {
   const userId = ctx.from.id;
   const isAdminUser = admin.isAdmin(userId);
   const isClientUser = await database.isClient(userId);
-  const hasCash = isAdminUser || (isClientUser && await database.hasCashAccess(userId));
+  const hasCash = isAdminUser || (isClientUser && await cashAccess.hasCashAccess(userId));
   
   if (!hasCash) return;
 
@@ -760,7 +761,7 @@ bot.on('text', async (ctx) => {
 
   try {
     // ── Касса: поиск клиента (админ и клиент с доступом) ──
-    if (data.step === 'cash_search' && (isAdminUser || await database.hasCashAccess(userId))) {
+    if (data.step === 'cash_search' && (isAdminUser || await cashAccess.hasCashAccess(userId))) {
       const query = text.trim().toLowerCase();
       if (query.length < 2) {
         return ctx.reply('⚠️ Введите минимум 2 символа');
