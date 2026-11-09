@@ -611,7 +611,25 @@ bot.hears('📊 Мои записи кассы', async (ctx) => {
   }
 });
 
-bot.command('grant_cash', async (ctx) => {
+bot.command('debug_cash', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!admin.isAdmin(userId)) return;
+  
+  const checks = [];
+  checks.push('database type: ' + typeof database);
+  checks.push('hasCashAccess fn: ' + typeof database.hasCashAccess);
+  checks.push('grantCashAccess fn: ' + typeof database.grantCashAccess);
+  checks.push('getClientsWithCashAccess fn: ' + typeof database.getClientsWithCashAccess);
+  checks.push('hasCashAccessDB fn: ' + typeof hasCashAccessDB);
+  
+  const fs = require('fs');
+  checks.push('cash-access.js exists: ' + fs.existsSync(__dirname + '/cash-access.js'));
+  checks.push('bot.js path: ' + __filename);
+  
+  ctx.reply(checks.join('\n'));
+});
+
+
   const userId = ctx.from.id;
   if (!admin.isAdmin(userId)) return;
 
