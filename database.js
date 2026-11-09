@@ -908,6 +908,39 @@ class Database {
     }
   }
 
+  // ── Отчёт кассы по конкретному создателю (для клиентов-операторов) ──────────
+  async getCashReportByCreator(creatorId) {
+    try {
+      const result = await this.pool.query(`
+        SELECT client_name, client_phone, mode, usd, somoni, rate, comment, created_at
+        FROM cash_records
+        WHERE admin_id = $1
+        ORDER BY created_at DESC
+      `, [creatorId]);
+      return result.rows;
+    } catch (error) {
+      console.error('❌ Ошибка получения отчёта по создателю:', error);
+      return [];
+    }
+  }
+
+  async getCashTotalsByCreator(creatorId) {
+    try {
+      const result = await this.pool.query(`
+        SELECT 
+          COALESCE(SUM(usd), 0) AS total_usd,
+          COALESCE(SUM(somoni), 0) AS total_somoni,
+          COUNT(*) AS count
+        FROM cash_records
+        WHERE admin_id = $1
+      `, [creatorId]);
+      return result.rows[0];
+    } catch (error) {
+      console.error('❌ Ошибка получения итогов по создателю:', error);
+      return { total_usd: 0, total_somoni: 0, count: 0 };
+    }
+  }
+
   async close() {
     await this.pool.end();
   }

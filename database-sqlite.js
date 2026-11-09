@@ -495,6 +495,24 @@ class Database {
     return row || { total_usd: 0, total_somoni: 0, count: 0 };
   }
 
+  // ── Отчёт кассы по конкретному создателю (для клиентов-операторов) ──────────
+  async getCashReportByCreator(creatorId) {
+    await db._ready;
+    return db.all(
+      'SELECT client_name, client_phone, mode, usd, somoni, rate, comment, created_at FROM cash_records WHERE admin_id = ? ORDER BY created_at DESC',
+      [creatorId]
+    );
+  }
+
+  async getCashTotalsByCreator(creatorId) {
+    await db._ready;
+    const row = await db.get(
+      'SELECT COALESCE(SUM(usd), 0) as total_usd, COALESCE(SUM(somoni), 0) as total_somoni, COUNT(*) as count FROM cash_records WHERE admin_id = ?',
+      [creatorId]
+    );
+    return row || { total_usd: 0, total_somoni: 0, count: 0 };
+  }
+
   async getCashSummary(days) {
     await db._ready;
     let whereClause = '';

@@ -286,11 +286,12 @@ bot.command('start', async (ctx) => {
     ];
     if (hasCash) {
       keyboard.push([{ text: '💰 Касса' }]);
+      keyboard.push([{ text: '📊 Мои записи кассы' }]);
     }
     
     return ctx.reply(
       '👋 Добро пожаловать в систему приема заявок!\n\n' +
-      'Нажмите "🏬 Склад" чтобы создать заявку' + (hasCash ? ' или "💰 Касса" для инкассо' : ''),
+      'Нажмите "🏬 Склад" чтобы создать заявку' + (hasCash ? '\n"💰 Касса" — инкассо кассиру\n"📊 Мои записи кассы" — ваши записи' : ''),
       { reply_markup: { keyboard, resize_keyboard: true } }
     );
   }
@@ -503,6 +504,55 @@ bot.hears('🔑 Доступ к кассе', async (ctx) => {
   ctx.reply(msg);
 });
 
+// ── Мои записи кассы (для клиентов с доступом) ────────────────────────────────
+bot.hears('📊 Мои записи кассы', async (ctx) => {
+  const userId = ctx.from.id;
+  const isAdminUser = admin.isAdmin(userId);
+  const isClientUser = await database.isClient(userId);
+  const hasCash = isAdminUser || (isClientUser && await database.hasCashAccess(userId));
+  
+  if (!hasCash) return;
+
+  try {
+    // Клиент видит только свои записи, админ — все
+    const records = isAdminUser
+      ? await database.getCashReport()
+      : await database.getCashReportByCreator(userId);
+    const totals = isAdminUser
+      ? await database.getCashTotals()
+      : await database.getCashTotalsByCreator(userId);
+
+    let msg = isAdminUser ? '📊 Отчёт кассы\n\n' : '📊 Мои записи кассы\n\n';
+
+    if (records.length === 0) {
+      msg += '📭 У вас пока нет записей\n';
+    } else {
+      records.forEach((r, i) => {
+        const date = new Date(r.created_at).toLocaleDateString('ru-RU');
+        msg += `${i + 1}. ${r.client_name} (${r.client_phone || '—'})\n`;
+        if (r.mode === 'usd' || r.mode === 'both') msg += `   💵 $${parseFloat(r.usd).toLocaleString('ru-RU')}\n`;
+        if (r.mode === 'somoni' || r.mode === 'both') msg += `   💴 ${parseFloat(r.somoni).toLocaleString('ru-RU')} сом\n`;
+        msg += `   📅 ${date}\n`;
+      });
+    }
+
+    msg += '\n━━━━━━━━━━━━━━━\n';
+    msg += `💵 Итого: $${parseFloat(totals.total_usd || 0).toLocaleString('ru-RU')}\n`;
+    msg += `💴 Итого: ${parseFloat(totals.total_somoni || 0).toLocaleString('ru-RU')} сом\n`;
+    msg += `📦 Записей: ${totals.count || 0}`;
+
+    const inlineKb = [[{ text: '📤 Передать кассиру', callback_data: 'cash_report_send' }]];
+    inlineKb.push([{ text: '📥 Скачать Excel', callback_data: 'cash_report_excel' }, { text: '❌ Закрыть', callback_data: 'cash_report_close' }]);
+
+    await ctx.reply(msg, {
+      reply_markup: { inline_keyboard: inlineKb }
+    });
+  } catch (error) {
+    console.error('Ошибка отчёта кассы:', error);
+    ctx.reply('❌ Ошибка получения отчёта');
+  }
+});
+
 bot.command('grant_cash', async (ctx) => {
   const userId = ctx.from.id;
   if (!admin.isAdmin(userId)) return;
@@ -559,41 +609,12 @@ bot.hears('💰 Касса', async (ctx) => {
   
   if (!hasCash) return;
 
-  if (isAdminUser) {
-    // Админ — ищет клиента
-    orderData.set(userId, { step: 'cash_search', createdAt: Date.now() });
-    ctx.reply(
-      '💰 Касса — Инкасса\n\n🔍 Введите имя или телефон клиента:',
-      { reply_markup: { remove_keyboard: true } }
-    );
-  } else {
-    // Клиент с доступом — сразу выбор валюты
-    const client = await database.getClient(userId);
-    if (!client) return ctx.reply('❌ Ошибка: данные клиента не найдены');
-    
-    orderData.set(userId, {
-      step: 'cash_select_mode',
-      cashClient: client,
-      createdAt: Date.now()
-    });
-    
-    ctx.reply(
-      `💰 Касса — Инкассо\n\n` +
-      `👤 ${client.name}\n` +
-      `📞 ${client.phone || 'не указан'}\n\n` +
-      `💱 Какую валюту вы принесли?`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '💵 Доллар', callback_data: 'cash_mode_usd' }],
-            [{ text: '💴 Сомони', callback_data: 'cash_mode_somoni' }],
-            [{ text: '💵+💴 Обе валюты', callback_data: 'cash_mode_both' }],
-            [{ text: '❌ Отмена', callback_data: 'cash_cancel' }]
-          ]
-        }
-      }
-    );
-  }
+  // И админ и клиент с доступом — ищут клиента
+  orderData.set(userId, { step: 'cash_search', createdAt: Date.now() });
+  ctx.reply(
+    '💰 Касса — Инкасса\n\n🔍 Введите имя или телефон клиента:',
+    { reply_markup: { remove_keyboard: true } }
+  );
 });
 
 bot.hears('📈 Сводный отчёт', async (ctx) => {
@@ -738,8 +759,8 @@ bot.on('text', async (ctx) => {
   const data = orderData.get(userId) || { items: [], step: 'name' };
 
   try {
-    // ── Касса: поиск клиента ──
-    if (data.step === 'cash_search' && isAdminUser) {
+    // ── Касса: поиск клиента (админ и клиент с доступом) ──
+    if (data.step === 'cash_search' && (isAdminUser || await database.hasCashAccess(userId))) {
       const query = text.trim().toLowerCase();
       if (query.length < 2) {
         return ctx.reply('⚠️ Введите минимум 2 символа');
