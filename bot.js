@@ -484,25 +484,33 @@ bot.hears('🔑 Доступ к кассе', async (ctx) => {
   const userId = ctx.from.id;
   if (!admin.isAdmin(userId)) return;
 
-  const clients = await cashAccess.getClientsWithCashAccess();
-
-  let msg = '🔑 Доступ к кассе\n\n';
-
-  if (clients.length > 0) {
-    msg += 'Клиенты с доступом:\n';
-    clients.forEach((c, i) => {
-      msg += `${i + 1}. ${c.name} (${c.phone || 'без тел.'})\n   ID: ${c.telegram_id}\n`;
+  try {
+    const { Pool } = require('pg');
+    const pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
     });
-  } else {
-    msg += 'Нет клиентов с доступом к кассе.\n';
+
+    const result = await pool.query(
+      'SELECT telegram_id, name, phone FROM clients WHERE is_active = 1 AND cash_access = 1 ORDER BY name'
+    );
+    await pool.end();
+
+    let msg = '🔑 Доступ к кассе\n\n';
+    if (result.rows.length > 0) {
+      msg += 'Клиенты с доступом:\n';
+      result.rows.forEach((c, i) => {
+        msg += `${i + 1}. ${c.name} (${c.phone || 'без тел.'})\n   ID: ${c.telegram_id}\n`;
+      });
+    } else {
+      msg += 'Нет клиентов с доступом к кассе.\n';
+    }
+    msg += '\n💡 Команды:\n/grant_cash <ID> — дать доступ\n/revoke_cash <ID> — забрать доступ';
+    ctx.reply(msg);
+  } catch (e) {
+    console.error('Ошибка getClientsWithCashAccess:', e.message);
+    ctx.reply('❌ Ошибка: ' + e.message);
   }
-
-  msg += '\n💡 Чтобы дать доступ — найдите клиента через "👥 Управление клиентами" и используйте команду:\n';
-  msg += '/grant_cash <ID> — дать доступ\n';
-  msg += '/revoke_cash <ID> — забрать доступ\n\n';
-  msg += 'Где <ID> — Telegram ID клиента из списка выше.';
-
-  ctx.reply(msg);
 });
 
 // ── Мои записи кассы (для клиентов с доступом) ────────────────────────────────
