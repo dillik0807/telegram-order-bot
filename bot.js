@@ -279,14 +279,18 @@ bot.command('start', async (ctx) => {
   }
   
   if (isClientUser) {
-    // Показываем постоянное меню
+    // Проверяем есть ли доступ к кассе
+    const hasCash = await database.hasCashAccess(userId);
     const keyboard = [
       [{ text: '🏬 Склад' }]
     ];
+    if (hasCash) {
+      keyboard.push([{ text: '💰 Касса' }]);
+    }
     
     return ctx.reply(
       '👋 Добро пожаловать в систему приема заявок!\n\n' +
-      'Нажмите "🏬 Склад" чтобы создать заявку',
+      'Нажмите "🏬 Склад" чтобы создать заявку' + (hasCash ? ' или "💰 Касса" для инкассо' : ''),
       { reply_markup: { keyboard, resize_keyboard: true } }
     );
   }
@@ -434,6 +438,7 @@ bot.hears('👨‍💼 Панель администратора', async (ctx) =
     [{ text: '📋 Список клиентов' }],
     [{ text: '✏️ Изменить данные клиента' }],
     [{ text: '🚫 Заблокировать клиента' }],
+    [{ text: '🔑 Доступ к кассе' }],
     [{ text: '🏬 Управление складами' }],
     [{ text: '🛒 Управление товарами' }],
     [{ text: '💰 Касса' }],
@@ -470,19 +475,125 @@ bot.hears('🔙 Назад', async (ctx) => {
 });
 
 // ============================================================
+// 🔑 ДОСТУП К КАССЕ — выдача/отзыв доступа клиентам
+// ============================================================
+
+bot.hears('🔑 Доступ к кассе', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!admin.isAdmin(userId)) return;
+
+  const clients = await database.getClientsWithCashAccess();
+
+  let msg = '🔑 Доступ к кассе\n\n';
+
+  if (clients.length > 0) {
+    msg += 'Клиенты с доступом:\n';
+    clients.forEach((c, i) => {
+      msg += `${i + 1}. ${c.name} (${c.phone || 'без тел.'})\n   ID: ${c.telegram_id}\n`;
+    });
+  } else {
+    msg += 'Нет клиентов с доступом к кассе.\n';
+  }
+
+  msg += '\n💡 Чтобы дать доступ — найдите клиента через "👥 Управление клиентами" и используйте команду:\n';
+  msg += '/grant_cash <ID> — дать доступ\n';
+  msg += '/revoke_cash <ID> — забрать доступ\n\n';
+  msg += 'Где <ID> — Telegram ID клиента из списка выше.';
+
+  ctx.reply(msg);
+});
+
+bot.command('grant_cash', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!admin.isAdmin(userId)) return;
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 2) {
+    return ctx.reply('⚠️ Использование: /grant_cash <Telegram ID клиента>');
+  }
+
+  const targetId = parseInt(parts[1]);
+  if (isNaN(targetId)) {
+    return ctx.reply('⚠️ Неверный ID. Использование: /grant_cash <Telegram ID>');
+  }
+
+  const granted = await database.grantCashAccess(targetId);
+  if (granted) {
+    ctx.reply(`✅ Доступ к кассе выдан для клиента ID: ${targetId}\n\nКлиент увидит кнопку "💰 Касса" после /start`);
+  } else {
+    ctx.reply(`❌ Клиент с ID ${targetId} не найден. Убедитесь что клиент зарегистрирован и активен.`);
+  }
+});
+
+bot.command('revoke_cash', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!admin.isAdmin(userId)) return;
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 2) {
+    return ctx.reply('⚠️ Использование: /revoke_cash <Telegram ID клиента>');
+  }
+
+  const targetId = parseInt(parts[1]);
+  if (isNaN(targetId)) {
+    return ctx.reply('⚠️ Неверный ID. Использование: /revoke_cash <Telegram ID>');
+  }
+
+  const revoked = await database.revokeCashAccess(targetId);
+  if (revoked) {
+    ctx.reply(`✅ Доступ к кассе забран у клиента ID: ${targetId}`);
+  } else {
+    ctx.reply(`❌ Клиент с ID ${targetId} не найден.`);
+  }
+});
+
+// ============================================================
 // 💰 КАССА — инкассо кассиру через WhatsApp
 // ============================================================
 
 bot.hears('💰 Касса', async (ctx) => {
   const userId = ctx.from.id;
-  if (!admin.isAdmin(userId)) return;
+  const isAdminUser = admin.isAdmin(userId);
+  const isClientUser = await database.isClient(userId);
+  const hasCash = isAdminUser || (isClientUser && await database.hasCashAccess(userId));
+  
+  if (!hasCash) return;
 
-  orderData.set(userId, { step: 'cash_search', createdAt: Date.now() });
-
-  ctx.reply(
-    '💰 Касса — Инкасса\n\n🔍 Введите имя или телефон клиента:',
-    { reply_markup: { remove_keyboard: true } }
-  );
+  if (isAdminUser) {
+    // Админ — ищет клиента
+    orderData.set(userId, { step: 'cash_search', createdAt: Date.now() });
+    ctx.reply(
+      '💰 Касса — Инкасса\n\n🔍 Введите имя или телефон клиента:',
+      { reply_markup: { remove_keyboard: true } }
+    );
+  } else {
+    // Клиент с доступом — сразу выбор валюты
+    const client = await database.getClient(userId);
+    if (!client) return ctx.reply('❌ Ошибка: данные клиента не найдены');
+    
+    orderData.set(userId, {
+      step: 'cash_select_mode',
+      cashClient: client,
+      createdAt: Date.now()
+    });
+    
+    ctx.reply(
+      `💰 Касса — Инкассо\n\n` +
+      `👤 ${client.name}\n` +
+      `📞 ${client.phone || 'не указан'}\n\n` +
+      `💱 Какую валюту вы принесли?`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '💵 Доллар', callback_data: 'cash_mode_usd' }],
+            [{ text: '💴 Сомони', callback_data: 'cash_mode_somoni' }],
+            [{ text: '💵+💴 Обе валюты', callback_data: 'cash_mode_both' }],
+            [{ text: '❌ Отмена', callback_data: 'cash_cancel' }]
+          ]
+        }
+      }
+    );
+  }
 });
 
 bot.hears('📈 Сводный отчёт', async (ctx) => {
@@ -658,7 +769,7 @@ bot.on('text', async (ctx) => {
     }
 
     // ── Касса: ввод суммы (доллар) ──
-    if (data.step === 'cash_enter_usd' && isAdminUser) {
+    if (data.step === 'cash_enter_usd' && data.cashClient) {
       const amount = text.trim().replace(',', '.');
       if (!/^\d+(\.\d+)?$/.test(amount)) {
         return ctx.reply('⚠️ Введите сумму числом (например: 500)');
@@ -675,7 +786,7 @@ bot.on('text', async (ctx) => {
     }
 
     // ── Касса: ввод суммы (сомони) ──
-    if (data.step === 'cash_enter_somoni' && isAdminUser) {
+    if (data.step === 'cash_enter_somoni' && data.cashClient) {
       const amount = text.trim().replace(',', '.');
       if (!/^\d+(\.\d+)?$/.test(amount)) {
         return ctx.reply('⚠️ Введите сумму числом (например: 5000)');
@@ -687,7 +798,7 @@ bot.on('text', async (ctx) => {
     }
 
     // ── Касса: ввод курса (после сомони) ──
-    if (data.step === 'cash_enter_rate' && isAdminUser) {
+    if (data.step === 'cash_enter_rate' && data.cashClient) {
       const rate = text.trim().replace(',', '.');
       if (!/^\d+(\.\d+)?$/.test(rate)) {
         return ctx.reply('⚠️ Введите курс числом (например: 10900)');
@@ -699,7 +810,7 @@ bot.on('text', async (ctx) => {
     }
 
     // ── Касса: ввод комментария ──
-    if (data.step === 'cash_enter_comment' && isAdminUser) {
+    if (data.step === 'cash_enter_comment' && data.cashClient) {
       data.cashComment = text.trim() === '/skip' ? '' : text.trim();
       return buildCashMessage(ctx, userId, data);
     }

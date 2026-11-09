@@ -147,6 +147,20 @@ class Database {
         console.log(`⚠️ Ошибка добавления clients.is_active: ${e.message}`);
       }
 
+      // Миграция: cash_access для clients
+      try {
+        const check = await this.pool.query(`
+          SELECT column_name FROM information_schema.columns 
+          WHERE table_name = 'clients' AND column_name = 'cash_access'
+        `);
+        if (check.rows.length === 0) {
+          await this.pool.query(`ALTER TABLE clients ADD COLUMN cash_access INTEGER DEFAULT 0`);
+          console.log('✅ Колонка clients.cash_access добавлена');
+        }
+      } catch (e) {
+        console.log(`⚠️ Ошибка добавления clients.cash_access: ${e.message}`);
+      }
+
       // Таблица товаров
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS products (
@@ -301,6 +315,54 @@ class Database {
         [telegramId]
       );
       return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ── Доступ к кассе для клиентов ──────────────────────────────────────────────
+  async hasCashAccess(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'SELECT cash_access FROM clients WHERE telegram_id = $1 AND is_active = 1',
+        [telegramId]
+      );
+      return result.rows.length > 0 && result.rows[0].cash_access === 1;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async grantCashAccess(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE clients SET cash_access = 1 WHERE telegram_id = $1 AND is_active = 1',
+        [telegramId]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async revokeCashAccess(telegramId) {
+    try {
+      const result = await this.pool.query(
+        'UPDATE clients SET cash_access = 0 WHERE telegram_id = $1',
+        [telegramId]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getClientsWithCashAccess() {
+    try {
+      const result = await this.pool.query(
+        'SELECT telegram_id, name, phone FROM clients WHERE is_active = 1 AND cash_access = 1 ORDER BY name'
+      );
+      return result.rows;
     } catch (error) {
       throw error;
     }

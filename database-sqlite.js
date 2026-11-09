@@ -141,6 +141,7 @@ class SqliteDb {
         `ALTER TABLE warehouses ADD COLUMN is_active INTEGER DEFAULT 1`,
         `ALTER TABLE products ADD COLUMN is_active INTEGER DEFAULT 1`,
         `ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1`,
+        `ALTER TABLE clients ADD COLUMN cash_access INTEGER DEFAULT 0`,
         `ALTER TABLE cash_records ADD COLUMN comment TEXT`,
         `ALTER TABLE orders ADD COLUMN client_id INTEGER`,
       ];
@@ -232,6 +233,34 @@ class Database {
       [telegramId]
     );
     return result.changes > 0;
+  }
+
+  // ── Доступ к кассе для клиентов ──────────────────────────────────────────────
+  async hasCashAccess(telegramId) {
+    await db._ready;
+    try {
+      const row = await db.get('SELECT cash_access FROM clients WHERE telegram_id = ? AND is_active = 1', [telegramId]);
+      return row && row.cash_access === 1;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async grantCashAccess(telegramId) {
+    await db._ready;
+    const result = await db.run('UPDATE clients SET cash_access = 1 WHERE telegram_id = ? AND is_active = 1', [telegramId]);
+    return result.changes > 0;
+  }
+
+  async revokeCashAccess(telegramId) {
+    await db._ready;
+    const result = await db.run('UPDATE clients SET cash_access = 0 WHERE telegram_id = ?', [telegramId]);
+    return result.changes > 0;
+  }
+
+  async getClientsWithCashAccess() {
+    await db._ready;
+    return db.all('SELECT telegram_id, name, phone FROM clients WHERE is_active = 1 AND cash_access = 1 ORDER BY name');
   }
 
   async getClient(telegramId) {
